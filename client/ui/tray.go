@@ -74,11 +74,11 @@ func checkForUpdates(item *systray.MenuItem) {
 	result, hasUpdate, err := update.CheckLatestVersion()
 	if err != nil {
 		log.Println(err)
-		showTemporaryTitle(item, "Update Check Failed")
+		showTemporaryTitle(item, "Update Failed: Check Logs")
 		return
 	}
 	if !hasUpdate {
-		showTemporaryTitle(item, "Up to Date")
+		showTemporaryTitle(item, "Up to Date ("+result.CurrentVersion+")")
 		return
 	}
 
@@ -86,14 +86,14 @@ func checkForUpdates(item *systray.MenuItem) {
 	result, err = update.CheckAndUpdate()
 	if err != nil {
 		log.Println(err)
-		showTemporaryTitle(item, "Update Failed")
+		showTemporaryTitle(item, "Update Failed: Check Logs")
 		return
 	}
 	if result.Updated {
-		showTemporaryTitle(item, "Update Installed")
+		item.SetTitle("Updated to " + result.LatestVersion + " - Restarting...")
 		return
 	}
-	showTemporaryTitle(item, "Up to Date")
+	showTemporaryTitle(item, "Up to Date ("+result.CurrentVersion+")")
 }
 
 func showTemporaryTitle(item *systray.MenuItem, title string) {

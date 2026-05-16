@@ -3,6 +3,7 @@ package update
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -43,5 +44,15 @@ func replaceExecutable(newExecutable []byte) error {
 	}
 
 	os.Remove(backupPath) // TODO: delete on next startup
+	if err := restartExecutable(currentExe); err != nil {
+		return fmt.Errorf("restarting updated executable: %w", err)
+	}
+	os.Exit(0)
 	return nil
+}
+
+func restartExecutable(path string) error {
+	cmd := exec.Command(path)
+	cmd.Env = os.Environ()
+	return cmd.Start()
 }

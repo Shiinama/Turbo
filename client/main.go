@@ -1,8 +1,8 @@
 package main
 
 import (
+	"client/platform/applog"
 	"client/platform/autostart"
-	"client/platform/update"
 	"client/quic"
 	"client/ui"
 	_ "embed"
@@ -15,6 +15,10 @@ import (
 var iconData []byte
 
 func main() {
+	if err := applog.Init(); err != nil {
+		log.Println(err)
+	}
+
 	go quic.ConnectQuicServer()
 
 	systray.Run(onReady, nil)
@@ -24,10 +28,6 @@ func onReady() {
 	ui.SetupTray(iconData)
 
 	if err := autostart.EnableAutoStart(); err != nil {
-		log.Println(err)
-	}
-
-	if err := update.AutoUpdate(); err != nil {
 		log.Println(err)
 	}
 }

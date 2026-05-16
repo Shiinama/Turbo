@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"client/quic"
 	"log"
 	"os/exec"
 	"runtime"
@@ -9,31 +8,19 @@ import (
 	"github.com/getlantern/systray"
 )
 
-func SetupTray(websiteUrl string, icon []byte) {
+func SetupTray(adminURL string, icon []byte) {
 	systray.SetTemplateIcon(icon, icon)
 	systray.SetTooltip("Turbo running")
 
-	connect := systray.AddMenuItem("Connect", "Connect with your account")
-	dashboard := systray.AddMenuItem("Dashboard", "Open dashboard")
+	dashboard := systray.AddMenuItem("Stats", "Open server stats")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Quit the whole app")
-
-	dashboard.Hide()
 
 	go func() {
 		for {
 			select {
-			case <-connect.ClickedCh:
-				port := quic.UIDCollector()
-				err := open(websiteUrl + "/desktop-auth/check?port=" + port)
-				if err != nil {
-					log.Println("Failed to open browser:", err)
-				}
-
-				connect.Hide()
-				dashboard.Show()
 			case <-dashboard.ClickedCh:
-				err := open(websiteUrl + "/dashboard")
+				err := open(adminURL + "/admin/nodes")
 				if err != nil {
 					log.Println("Failed to open browser:", err)
 				}

@@ -1,8 +1,6 @@
 package proxy
 
 import (
-	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,36 +8,37 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"server/database"
 	"server/proxy/user"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/quic-go/quic-go"
+	"github.com/gorilla/websocket"
 )
 
 type Message struct {
 	Type string `json:"type"`
-	ID   string `json:"ID"`
+	ID   string `json:"id"`
 	// Addr also contains port of the target website
 	Addr string `json:"addr,omitempty"`
 	Data string `json:"data,omitempty"`
 }
 
 var (
-	QuicClients           = make(map[string]*QuicClient)
-	QuicMutex             sync.RWMutex
-	quicListener          *quic.Listener
-	BrowserScreenshotData = make(chan []byte)
+	QuicClients  = make(map[string]*QuicClient)
+	QuicMutex    sync.RWMutex
+	nodeListener net.Listener
+	upgrader     = websocket.Upgrader{}
 )
 
 // QuicClient represents a connected QUIC client
 type QuicClient struct {
 	ID         string
-	conn       *quic.Conn
-	stream     *quic.Stream
+	conn       net.Conn
+	wsConn     *websocket.Conn
+	transport  string
 	mutex      sync.Mutex
 	userConns  map[string]*Connection
 	userMutex  sync.Mutex
@@ -50,51 +49,43 @@ type QuicClient struct {
 	kicked     atomic.Bool
 }
 
-// StartQuicServer initializes the QUIC server
-func StartQuicServer(addr string, tlsConfig *tls.Config) error {
-	listener, err := quic.ListenAddr(addr, tlsConfig, nil)
+// StartNodeServer initializes the TCP server used by node clients.
+func StartNodeServer(addr string) error {
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to start QUIC server: %w", err)
+		return fmt.Errorf("failed to start node server: %w", err)
 	}
 
-	quicListener = listener
-	log.Printf("QUIC server listening on %s", addr)
+	nodeListener = listener
+	log.Printf("Node TCP server listening on %s", addr)
 
-	go acceptQuicConnections(quicListener)
+	go acceptNodeConnections(nodeListener)
 
 	go ReportPing()
 
 	return nil
 }
 
-func acceptQuicConnections(listener *quic.Listener) {
+func acceptNodeConnections(listener net.Listener) {
 	for {
-		conn, err := listener.Accept(context.Background())
+		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("QUIC accept error: %v", err)
+			log.Printf("Node accept error: %v", err)
 			continue
 		}
 
-		go handleQuicConnection(conn)
+		go handleNodeConnection(conn)
 	}
 }
 
-func handleQuicConnection(conn *quic.Conn) {
+func handleNodeConnection(conn net.Conn) {
 	clientID := conn.RemoteAddr().String()
-	log.Printf("New QUIC client connected: %s", clientID)
-
-	// Accept a bidirectional stream
-	stream, err := conn.AcceptStream(context.Background())
-	if err != nil {
-		log.Printf("Failed to accept QUIC stream: %v", err)
-		conn.CloseWithError(1, "stream accept failed")
-		return
-	}
+	log.Printf("New node client connected: %s", clientID)
 
 	client := &QuicClient{
 		ID:        clientID,
 		conn:      conn,
-		stream:    stream,
+		transport: "tcp",
 		userConns: make(map[string]*Connection),
 		lastPing:  time.Now(),
 		Metrics: &Metrics{
@@ -103,7 +94,6 @@ func handleQuicConnection(conn *quic.Conn) {
 		},
 		Stats: &ClientStats{
 			ConnectTime: time.Now(),
-			CryptoAddr:  "",
 		},
 	}
 
@@ -115,47 +105,127 @@ func handleQuicConnection(conn *quic.Conn) {
 
 	country := "global"
 	if ip, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-		resp, err := http.Get("http://ip-api.com/csv/" + ip + "?fields=countryCode")
-		if err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode == 200 {
-				body, err := io.ReadAll(resp.Body)
-				if err == nil {
-					if user.IsValidCountryCode(country) {
-						country = string(body)
-					}
-				}
-			}
-		}
+		country = countryForIP(ip)
 	}
 	client.Stats.CountryCode = country
 
 	updatePools()
+	client.Save()
+}
+
+func HandleNodeWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Node websocket upgrade failed: %v", err)
+		return
+	}
+
+	clientID := forwardedRemoteAddr(r)
+	log.Printf("New websocket node client connected: %s", clientID)
+
+	client := &QuicClient{
+		ID:        clientID,
+		wsConn:    conn,
+		transport: "websocket",
+		userConns: make(map[string]*Connection),
+		lastPing:  time.Now(),
+		Metrics: &Metrics{
+			Reliability: 0.7,
+			Score:       50,
+		},
+		Stats: &ClientStats{
+			ConnectTime: time.Now(),
+		},
+	}
+
+	QuicMutex.Lock()
+	QuicClients[clientID] = client
+	QuicMutex.Unlock()
+
+	go quicReader(client)
+
+	country := "global"
+	if ip, _, err := net.SplitHostPort(clientID); err == nil {
+		country = countryForIP(ip)
+	}
+	client.Stats.CountryCode = country
+
+	updatePools()
+	client.Save()
+}
+
+func forwardedRemoteAddr(r *http.Request) string {
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	if forwardedFor == "" {
+		return r.RemoteAddr
+	}
+
+	ip := strings.TrimSpace(strings.Split(forwardedFor, ",")[0])
+	if ip == "" {
+		return r.RemoteAddr
+	}
+
+	_, port, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || port == "" {
+		return ip
+	}
+	return net.JoinHostPort(ip, port)
+}
+
+func countryForIP(ip string) string {
+	country := "global"
+	resp, err := http.Get("http://ip-api.com/csv/" + ip + "?fields=countryCode")
+	if err != nil {
+		return country
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return country
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return country
+	}
+	bodyCountry := string(body)
+	if user.IsValidCountryCode(bodyCountry) {
+		return bodyCountry
+	}
+	return country
 }
 
 func quicReader(client *QuicClient) {
 	defer func() {
 		QuicMutex.Lock()
 		delete(QuicClients, client.ID)
-		log.Printf("QUIC client disconnected: %s. Remaining clients: %d", client.ID, len(QuicClients))
+		log.Printf("Node client disconnected: %s. Remaining clients: %d", client.ID, len(QuicClients))
 		QuicMutex.Unlock()
 
-		client.stream.Close()
-		client.conn.CloseWithError(0, "client disconnected")
+		if err := database.MarkNodeInactive(client.ID); err != nil {
+			log.Printf("Failed to mark node inactive %s: %v", client.ID, err)
+		}
+		client.closeTransport()
 	}()
 
-	decoder := json.NewDecoder(client.stream)
 	for {
 		var msg Message
-		if err := decoder.Decode(&msg); err != nil {
+		if err := client.readMessage(&msg); err != nil {
 			if client.kicked.Load() {
 				return
 			}
-			log.Printf("QUIC read error for client %s: %v", client.ID, err)
+			log.Printf("Node read error for client %s: %v", client.ID, err)
 			return
 		}
 
 		switch msg.Type {
+		case "connected":
+			client.userMutex.Lock()
+			if sc, ok := client.userConns[msg.ID]; ok {
+				select {
+				case sc.DataChan <- []byte{}:
+				default:
+				}
+			}
+			client.userMutex.Unlock()
 		case "data":
 			client.userMutex.Lock()
 			if sc, ok := client.userConns[msg.ID]; ok {
@@ -173,31 +243,8 @@ func quicReader(client *QuicClient) {
 				delete(client.userConns, msg.ID)
 			}
 			client.userMutex.Unlock()
-		case "address":
-			client.Stats.CryptoAddr = msg.ID
 		case "pong":
 			client.Pong()
-		case "uid-register":
-			db, err := database.InitDatabase(os.Getenv("DATABASE_URL"))
-			if err != nil {
-				log.Println(err)
-			}
-
-			err = database.AddNode(db, msg.ID, client.ID)
-			if err != nil {
-				log.Printf("Error adding node to %s, %v", client.ID, err)
-			} else {
-				log.Printf("Registered Node %s for client %s", msg.ID, client.ID)
-			}
-
-			db.Close()
-
-			/*
-				TODO(architecture):
-					- Put Quic client stats into database
-					- Link Distant node with Quic client so that,
-					- Server can update Node stats.
-			*/
 		}
 	}
 }
@@ -216,8 +263,14 @@ func (c *QuicClient) SendMessage(msg Message) error {
 	}
 	data = append(data, '\n') // Add newline for JSON decoder
 
-	_, err = c.stream.Write(data)
-	return err
+	if c.wsConn != nil {
+		return c.wsConn.WriteMessage(websocket.TextMessage, data)
+	}
+	if c.conn != nil {
+		_, err = c.conn.Write(data)
+		return err
+	}
+	return fmt.Errorf("client has no active transport")
 }
 
 func (c *QuicClient) Kick(reason string) {
@@ -225,12 +278,10 @@ func (c *QuicClient) Kick(reason string) {
 		return // Already kicked
 	}
 
-	c.conn.CloseWithError(0, reason)
-
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.stream.Close()
+	c.closeTransport()
 
 	for id, sc := range c.userConns {
 		sc.Conn.Close()
@@ -243,5 +294,52 @@ func (c *QuicClient) Kick(reason string) {
 
 	updatePools() // TODO: Inefficient, optimize client erasure
 
-	log.Printf("Kicked QUIC client %s for \"%s\"", c.ID, reason)
+	log.Printf("Kicked node client %s for \"%s\"", c.ID, reason)
+}
+
+func (c *QuicClient) readMessage(msg *Message) error {
+	if c.wsConn != nil {
+		_, data, err := c.wsConn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(data, msg)
+	}
+	if c.conn != nil {
+		return json.NewDecoder(c.conn).Decode(msg)
+	}
+	return fmt.Errorf("client has no active transport")
+}
+
+func (c *QuicClient) closeTransport() {
+	if c.wsConn != nil {
+		c.wsConn.Close()
+	}
+	if c.conn != nil {
+		c.conn.Close()
+	}
+}
+
+func (c *QuicClient) Save() {
+	if c == nil || c.Stats == nil || c.Metrics == nil {
+		return
+	}
+
+	err := database.UpsertNode(database.NodeRecord{
+		ID:            c.ID,
+		RemoteAddr:    c.ID,
+		Transport:     c.transport,
+		CountryCode:   c.Stats.CountryCode,
+		ActiveConns:   atomic.LoadInt32(&c.Stats.ActiveConns),
+		BytesSent:     atomic.LoadUint64(&c.Stats.BytesSent),
+		BytesReceived: atomic.LoadUint64(&c.Stats.BytesReceived),
+		Score:         c.Metrics.Score,
+		Latency:       c.Metrics.Latency,
+		ConnectedAt:   c.Stats.ConnectTime,
+		LastSeenAt:    time.Now(),
+		IsActive:      true,
+	})
+	if err != nil {
+		log.Printf("Failed to save node %s: %v", c.ID, err)
+	}
 }

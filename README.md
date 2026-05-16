@@ -8,53 +8,33 @@
 ## Features
 
 1. [x] Node connection quality analysis
-2. [x] Redis Auth & PUB/SUB (Credits, AI stream)
-3. [ ] ~~Chrome Extension for client~~
-4. [ ] AI abnormal traffic detection model
+2. [x] Admin username/password authentication
+3. [x] Railway Postgres node registry
+4. [ ] ~~Chrome Extension for client~~
+5. [ ] AI abnormal traffic detection model
 
 [//]: # (7. [ ] LLM Data Extraction with Cuelang)
 ## Global architecture
 
 ```mermaid
 flowchart TD
-    User(User)
-    subgraph Self-hosted [Self-hosted backend]
+    Admin(Admin)
+    ProxyBuyer(Proxy Buyer)
+    subgraph Railway [Railway backend]
         ProxyServer[Proxy Server]
-        Redis[(Redis Database & Streams)]
-        AI[AI Traffic Analysis] 
+        Postgres[(Railway Postgres)]
+        AdminUI[Admin UI]
     end
-%%    subgraph Zero-Trust Zone 
-        ClientNode[Client Node]
-        NodeRunner(Node Runner)
-%%    end
-    PaymentGateway[Payment Gateway]
-    Blockchain[(Crypto Blockchain)]
+    ClientNode[Client Node]
     TargetWebsite[Target Website]
-    Website[Next.js Website]
-    Supabase[(Supabase PostgreSQL)]
 
-    User --> |Sends HTTP/S or SOCKS5 Requests| ProxyServer
-    User --> |Buys Credits| PaymentGateway
-    
-    ProxyServer --> |Node data update| Supabase
-    ProxyServer <--> |TLS-encrypted QUIC Messaging| ClientNode
-    ProxyServer --> |Uses for Auth & Credits| Redis
-    
-    AI --> |Evaluates server connections| Redis
+    ProxyBuyer --> |Sends SOCKS5 requests| ProxyServer
+    Admin --> |Basic Auth| AdminUI
+    AdminUI --> |Reads node history| Postgres
 
+    ProxyServer --> |Node status updates| Postgres
+    ProxyServer <--> |WebSocket node messaging| ClientNode
     ClientNode --> |Processes Requests To| TargetWebsite
-    NodeRunner --> |Operates| ClientNode
-    
-
-    PaymentGateway --> |Processes Payments| Blockchain
-    PaymentGateway --> |Updates Credits In| Redis
-
-    Blockchain --> |Sends Rewards| NodeRunner
-    
-    Website --> |Provides Data| NodeRunner
-    Supabase <--> |Realtime stream| Website
-    
-    
 ```
 
 ## Run a Node
@@ -74,14 +54,12 @@ The Turbo client node is a lightweight process that runs in the background and t
 
 - Download the [latest release](https://github.com/L1shed/Turbo/releases) for your platform.
 - Open the downloaded executable — a new icon will appear in your system tray.
-- Click on the icon and select **"Connect"** to pair with your account.
+- The node connects to the configured server automatically.
 
 ![img.png](.github/assets/img.png)
-- A page will open, if authentication is successful, you will be redirected to the dashboard and your new node will appear in the nodes list.
+You can add multiple nodes as long as they are on different networks/IPs.
 
-  You can add an unlimited amount of nodes as long as they are on different networks/IPs.
-
-🎉 Congratulations! Your node is now earning passively, check out your dashboard regularly
+Your node is now connected; check the admin panel for status and usage.
 
 #### Monetization
 
@@ -129,11 +107,11 @@ sequenceDiagram
     participant Internet as Internet
 
     SOCKS5_Client->>Proxy_Server: 1. SOCKS5/HTTP CONNECT request
-    Proxy_Server->>Proxy_Client: 2. Forward dest. IP + TLS-encrypted payload via QUIC 
+    Proxy_Server->>Proxy_Client: 2. Forward dest. IP + encrypted payload via WebSocket
     Proxy_Client->>Internet: 3. Process request (TCP level) 
     
     Internet-->>Proxy_Client: 4. Return encrypted response
-    Proxy_Client-->>Proxy_Server: 5. Send data via QUIC
+    Proxy_Client-->>Proxy_Server: 5. Send data via WebSocket
     Proxy_Server-->>SOCKS5_Client: 6. Send back to SOCKS5 Client
 ```
 

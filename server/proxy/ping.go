@@ -9,7 +9,6 @@ import (
 type Metrics struct {
 	Latency        float64
 	latencyReports float64
-	Availability   float64
 	Reliability    float64
 	Score          float64
 }
@@ -55,6 +54,7 @@ func (c *QuicClient) Pong() {
 	c.lastPingID = ""
 	c.Metrics.Latency = float64(int16(time.Since(c.lastPing).Milliseconds()))
 	c.UpdateScore()
+	c.Save()
 }
 
 func (c *QuicClient) UpdateScore() {

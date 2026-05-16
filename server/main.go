@@ -1,80 +1,40 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
+	"os"
+	"server/admin"
 	"server/database"
 	"server/proxy"
-	"server/website"
-	"time"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func generateTLSCert() tls.Certificate {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Turbo Proxy Dev"},
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(time.Hour * 24 * 180), // Valid for 180 days
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:              []string{"localhost"},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	cert := tls.Certificate{
-		Certificate: [][]byte{certDER},
-		PrivateKey:  key,
-	}
-
-	return cert
-}
-
 func main() {
-	database.InitRedis()
+	if err := database.InitPostgres(); err != nil {
+		log.Fatal("Failed to initialize Postgres:", err)
+	}
 
-	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc("/stats", website.StatsHandler)
+	http.HandleFunc("/admin/nodes", admin.AdminNodesHandler)
+	http.HandleFunc("/node", proxy.HandleNodeWebSocket)
 	go func() {
-		if err := http.ListenAndServe(":8080", nil); err != nil {
-			log.Fatal("Failed to start Prometheus metrics endpoint:", err)
+		httpPort := getEnv("HTTP_PORT", "8080")
+		log.Println("Starting admin/node HTTP endpoint on :" + httpPort)
+		if err := http.ListenAndServe(":"+httpPort, nil); err != nil {
+			log.Fatal("Failed to start admin/node HTTP endpoint:", err)
 		}
 	}()
 
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true, // Skip verification for self-signed cert
-		Certificates:       []tls.Certificate{generateTLSCert()},
-		NextProtos:         []string{"turbo-proxy"}, // Application protocol
-	}
-	log.Println("Starting QUIC server on :8443")
-	err := proxy.StartQuicServer(":8443", tlsConfig)
+	nodePort := getEnv("NODE_PORT", "8443")
+	log.Println("Starting node TCP server on :" + nodePort)
+	err := proxy.StartNodeServer(":" + nodePort)
 	if err != nil {
-		log.Fatal("Failed to start QUIC server:", err)
+		log.Fatal("Failed to start node TCP server:", err)
 	}
 
-	log.Println("Starting SOCKS5 receiver on :1080")
-	listener, err := net.Listen("tcp", ":1080")
+	socksPort := getEnv("SOCKS_PORT", "1080")
+	log.Println("Starting SOCKS5 receiver on :" + socksPort)
+	listener, err := net.Listen("tcp", ":"+socksPort)
 	if err != nil {
 		log.Fatal("Failed to start SOCKS5 receiver:", err)
 	}
@@ -90,4 +50,11 @@ func main() {
 	}()
 
 	select {}
+}
+
+func getEnv(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

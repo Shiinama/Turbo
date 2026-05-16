@@ -7,6 +7,7 @@ import (
 	"client/ui"
 	_ "embed"
 	"log"
+	"os"
 
 	"github.com/getlantern/systray"
 )
@@ -15,7 +16,7 @@ import (
 var iconData []byte
 
 const (
-	WEBSITE = "https://turbo-node.vercel.app"
+	defaultAdminURL = "https://turbo-server-production-1e29.up.railway.app"
 )
 
 func main() {
@@ -25,7 +26,7 @@ func main() {
 }
 
 func onReady() {
-	ui.SetupTray(WEBSITE, iconData)
+	ui.SetupTray(getAdminURL(), iconData)
 
 	if err := autostart.EnableAutoStart(); err != nil {
 		log.Println(err)
@@ -33,9 +34,12 @@ func onReady() {
 
 	if err := update.AutoUpdate(); err != nil {
 		log.Println(err)
-		quic.SendMessage(&quic.Message{
-			Type: "stacktrace",
-			Data: "Auto-update failed: " + err.Error(),
-		})
 	}
+}
+
+func getAdminURL() string {
+	if url := os.Getenv("TURBO_ADMIN_URL"); url != "" {
+		return url
+	}
+	return defaultAdminURL
 }

@@ -19,7 +19,6 @@ type CountryPool struct {
 	clients           []*QuicClient
 	cumulativeWeights []float64 // Pre-computed for O(log n) selection
 	totalWeight       float64
-	lastUpdated       int64
 }
 
 func FindClient() *QuicClient {
@@ -89,7 +88,7 @@ func selectFromPool(pool *CountryPool) *QuicClient {
 }
 
 func (c *QuicClient) isHealthy() bool {
-	return c != nil && c.conn != nil
+	return c != nil && (c.conn != nil || c.wsConn != nil)
 }
 
 func updatePools() {

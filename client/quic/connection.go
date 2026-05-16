@@ -27,6 +27,8 @@ func handleConnect(msg Message) {
 	clientConns[msg.ID] = cc
 	clientMutex.Unlock()
 
+	SendMessage(&Message{Type: "connected", ID: msg.ID})
+
 	go relayFromConnToQuic(cc, msg.ID)
 	go relayFromChanToConn(cc, msg.ID)
 }

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Turbo Admin</title>
+    <meta http-equiv="refresh" content="15">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.5; color: #1f2937; }
+        h1, h2 { color: #1f2937; }
+        h1 { border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin: 16px 0 28px; }
+        th, td { padding: 9px; text-align: left; border: 1px solid #ddd; white-space: nowrap; }
+        th { background-color: #3498db; color: white; }
+        tr:nth-child(even) { background-color: #f7f7f7; }
+        label { display: block; font-weight: bold; margin-bottom: 4px; }
+        input, textarea { padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; width: 100%; box-sizing: border-box; }
+        textarea { min-height: 42px; }
+        button { padding: 9px 14px; background: #2563eb; color: white; border: 0; border-radius: 4px; cursor: pointer; }
+        .grid { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: 12px; align-items: end; }
+        .panel { padding: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin: 16px 0 24px; }
+        .active { color: #16803c; font-weight: bold; }
+        .inactive { color: #9a3412; }
+        .message { color: #16803c; font-weight: bold; }
+        .error { color: #b91c1c; font-weight: bold; }
+        .muted { color: #64748b; }
+        code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
+        .warn { color: #9a3412; }
+    </style>
+</head>
+<body>
+<h1>Turbo Admin</h1>
+
+<div class="panel">
+    <h2>Distribution Info</h2>
+    <p>Give proxy users the SOCKS5 host, port, username, and password from the table below.</p>
+    <p>SOCKS5 entry:
+        {{if .ProxyHost}}<code>{{.ProxyHost}}{{if .ProxyPort}}:{{.ProxyPort}}{{end}}</code>{{else}}<span class="warn">Set PROXY_PUBLIC_HOST and PROXY_PUBLIC_PORT to the public SOCKS5 entry.</span>{{end}}
+    </p>
+    <p>Node endpoint:
+        {{if .NodeURL}}<code>{{.NodeURL}}</code>{{else}}<code>wss://turbo-server-production-1e29.up.railway.app/node</code>{{end}}
+    </p>
+</div>
+
+<h2>Create Proxy User</h2>
+{{if .CreateDone}}<p class="message">{{.CreateDone}}</p>{{end}}
+{{if .CreateErr}}<p class="error">{{.CreateErr}}</p>{{end}}
+<form method="post" class="panel">
+    <div class="grid">
+        <div>
+            <label for="username">Username</label>
+            <input id="username" name="username" required>
+        </div>
+        <div>
+            <label for="password">Password</label>
+            <input id="password" name="password" required>
+        </div>
+        <div>
+            <label for="country_code">Country</label>
+            <input id="country_code" name="country_code" placeholder="global or US" value="global">
+        </div>
+        <div>
+            <label for="max_conns">Max Connections</label>
+            <input id="max_conns" name="max_conns" type="number" min="1" value="10">
+        </div>
+        <div>
+            <label for="is_active">Active</label>
+            <input id="is_active" name="is_active" type="checkbox" checked>
+        </div>
+    </div>
+    <div style="margin-top:12px;">
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes"></textarea>
+    </div>
+    <div style="margin-top:12px;">
+        <button type="submit">Create User</button>
+    </div>
+</form>
+
+<h2>Proxy Users</h2>
+<table>
+    <tr>
+        <th>Status</th>
+        <th>Host</th>
+        <th>Port</th>
+        <th>Username</th>
+        <th>Password</th>
+        <th>Country</th>
+        <th>Max Connections</th>
+        <th>Bytes Sent</th>
+        <th>Bytes Received</th>
+        <th>Last Used</th>
+        <th>Created</th>
+        <th>Notes</th>
+    </tr>
+    {{range .Users}}
+    <tr>
+        <td class="{{if .IsActive}}active{{else}}inactive{{end}}">{{if .IsActive}}active{{else}}inactive{{end}}</td>
+        <td>{{$.ProxyHost}}</td>
+        <td>{{$.ProxyPort}}</td>
+        <td>{{.Username}}</td>
+        <td>{{.Password}}</td>
+        <td>{{.CountryCode}}</td>
+        <td>{{.MaxConns}}</td>
+        <td>{{.BytesSent}}</td>
+        <td>{{.BytesRecv}}</td>
+        <td>{{.LastUsedAt}}</td>
+        <td>{{.CreatedAt}}</td>
+        <td>{{.Notes}}</td>
+    </tr>
+    {{end}}
+</table>
+
+<h2>Nodes</h2>
+<table>
+    <tr>
+        <th>Status</th>
+        <th>ID</th>
+        <th>Remote Address</th>
+        <th>Transport</th>
+        <th>Country</th>
+        <th>Active Connections</th>
+        <th>Bytes Sent</th>
+        <th>Bytes Received</th>
+        <th>Score</th>
+        <th>Latency</th>
+        <th>Connected At</th>
+        <th>Last Seen</th>
+    </tr>
+    {{range .Nodes}}
+    <tr>
+        <td class="{{if .IsActive}}active{{else}}inactive{{end}}">{{if .IsActive}}active{{else}}inactive{{end}}</td>
+        <td>{{.ID}}</td>
+        <td>{{.RemoteAddr}}</td>
+        <td>{{.Transport}}</td>
+        <td>{{.CountryCode}}</td>
+        <td>{{.ActiveConns}}</td>
+        <td>{{.BytesSent}}</td>
+        <td>{{.BytesReceived}}</td>
+        <td>{{printf "%.0f" .Score}}/100</td>
+        <td>{{printf "%.1f ms" .Latency}}</td>
+        <td>{{.ConnectedAt}}</td>
+        <td>{{.LastSeenAt}}</td>
+    </tr>
+    {{end}}
+</table>
+</body>
+</html>

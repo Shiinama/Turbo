@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
-	data2 "server/data"
+	"server/database"
 	"server/proxy/socks"
 	"sync/atomic"
 	"time"
@@ -20,17 +20,16 @@ type ClientStats struct {
 	ActiveConns   int32
 	BytesSent     uint64
 	BytesReceived uint64
-	CryptoAddr    string
 	CountryCode   string
 }
 
 func HandleSocksConn(conn net.Conn) {
 	defer conn.Close()
 
-	host, port, params, err := socks.HandleSocksHandshake(conn)
+	host, port, auth, err := socks.HandleSocksHandshake(conn)
 	country := "global"
-	if _, exists := params["country"]; exists {
-		country = params["country"]
+	if auth != nil && auth.CountryCode != "" {
+		country = auth.CountryCode
 	}
 
 	if err != nil {
@@ -41,6 +40,9 @@ func HandleSocksConn(conn net.Conn) {
 	var client *QuicClient
 
 	pc := CreateConnection(conn)
+	if auth != nil {
+		pc.ProxyUserID = auth.UserID
+	}
 
 	_, err = conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}) // success
 	if err != nil {
@@ -57,7 +59,7 @@ func HandleSocksConn(conn net.Conn) {
 	}
 	if n > 0 {
 		connData = base64.StdEncoding.EncodeToString(buffer[:n])
-		pc.Features.Inbound[time.Since(pc.Features.StartTime).Microseconds()] += uint16(n)
+		pc.BytesSent += uint64(n)
 	}
 	msg := Message{Type: "connect", ID: pc.ID, Addr: fmt.Sprintf("%s:%d", host, port), Data: connData}
 
@@ -76,6 +78,7 @@ func HandleSocksConn(conn net.Conn) {
 		client.userConns[pc.ID] = pc
 		client.userMutex.Unlock()
 		atomic.AddInt32(&client.Stats.ActiveConns, 1)
+		client.Save()
 
 		err = client.SendMessage(msg)
 		if err != nil {
@@ -102,6 +105,12 @@ func HandleSocksConn(conn net.Conn) {
 		if success {
 			atomic.AddUint64(&client.Stats.BytesSent, uint64(n))
 			go relayFromSocksToQuic(client, pc)
+			if initialData := <-pc.DataChan; len(initialData) > 0 {
+				_, err := pc.Conn.Write(initialData)
+				if err != nil {
+					return
+				}
+			}
 			relayFromChanToSocks(client, pc)
 			return
 		}
@@ -115,19 +124,19 @@ func relayFromSocksToQuic(client *QuicClient, pc *Connection) {
 	for {
 		n, err := pc.Conn.Read(buf)
 		if err != nil {
-			pc.Features.Outbound[time.Since(pc.Features.StartTime).Microseconds()] += uint16(n)
 			client.SendCloseMessage(pc.ID)
 			return
 		}
 
 		dataSize := uint64(n)
 		atomic.AddUint64(&client.Stats.BytesSent, dataSize)
-		pc.Features.Outbound[time.Since(pc.Features.StartTime).Microseconds()] += uint16(n)
+		pc.BytesSent += dataSize
+		client.Save()
 
 		data := base64.StdEncoding.EncodeToString(buf[:n])
 		msg := Message{Type: "data", ID: pc.ID, Data: data}
-		if client.conn != nil {
-			client.SendMessage(msg)
+		if err := client.SendMessage(msg); err != nil {
+			return
 		}
 	}
 }
@@ -136,7 +145,8 @@ func relayFromChanToSocks(client *QuicClient, pc *Connection) {
 	for data := range pc.DataChan {
 		n, err := pc.Conn.Write(data)
 		atomic.AddUint64(&client.Stats.BytesReceived, uint64(n))
-		pc.Features.Inbound[time.Since(pc.Features.StartTime).Microseconds()] += uint16(n)
+		pc.BytesReceived += uint64(n)
+		client.Save()
 		if err != nil {
 			//client.SendCloseMessage(pc.ID)
 			return
@@ -146,9 +156,7 @@ func relayFromChanToSocks(client *QuicClient, pc *Connection) {
 
 func (c *QuicClient) SendCloseMessage(id string) {
 	msg := Message{Type: "close", ID: id}
-	if c.conn != nil {
-		c.SendMessage(msg)
-	}
+	c.SendMessage(msg)
 
 	c.userMutex.Lock()
 	sc := c.userConns[id]
@@ -156,8 +164,11 @@ func (c *QuicClient) SendCloseMessage(id string) {
 	c.userMutex.Unlock()
 
 	if sc != nil {
-		data2.LogConnection(sc.Features)
+		if err := database.AddProxyUserUsage(sc.ProxyUserID, sc.BytesSent, sc.BytesReceived); err != nil {
+			log.Printf("failed to update proxy user usage: %v", err)
+		}
 		atomic.AddInt32(&c.Stats.ActiveConns, -1)
+		c.Save()
 		sc.Conn.Close()
 	} else {
 		println("é- double closing")

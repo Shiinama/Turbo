@@ -24,7 +24,7 @@ const (
 	GeneralFailure = 0x01
 )
 
-func HandleSocksHandshake(conn net.Conn) (string, int, map[string]string, error) {
+func HandleSocksHandshake(conn net.Conn) (string, int, *AuthResult, error) {
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return "", 0, nil, err
@@ -56,8 +56,8 @@ func HandleSocksHandshake(conn net.Conn) (string, int, map[string]string, error)
 		return "", 0, nil, err
 	}
 
-	authenticated, params, err := Authenticate(conn)
-	if err != nil || !authenticated {
+	auth, err := Authenticate(conn)
+	if err != nil {
 		return "", 0, nil, fmt.Errorf("authentication failed: %e", err)
 	}
 
@@ -114,5 +114,5 @@ func HandleSocksHandshake(conn net.Conn) (string, int, map[string]string, error)
 	}
 	targetPort = int(binary.BigEndian.Uint16(portBytes))
 
-	return targetAddr, targetPort, params, nil
+	return targetAddr, targetPort, auth, nil
 }

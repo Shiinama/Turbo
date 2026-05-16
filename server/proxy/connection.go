@@ -2,16 +2,16 @@ package proxy
 
 import (
 	"net"
-	"server/data"
 	"strconv"
-	"time"
 )
 
 type Connection struct {
-	ID       string
-	Conn     net.Conn
-	DataChan chan []byte
-	Features *data.ConnectionFeatures
+	ID            string
+	Conn          net.Conn
+	DataChan      chan []byte
+	ProxyUserID   int64
+	BytesSent     uint64
+	BytesReceived uint64
 }
 
 var nextID int
@@ -23,11 +23,5 @@ func CreateConnection(conn net.Conn) *Connection {
 		ID:       strconv.Itoa(nextID),
 		Conn:     conn,
 		DataChan: dataChan,
-		Features: &data.ConnectionFeatures{
-			StartTime: time.Now(),
-			Protocol:  conn.RemoteAddr().Network(),
-			Inbound:   make(map[int64]uint16),
-			Outbound:  make(map[int64]uint16),
-		},
 	}
 }

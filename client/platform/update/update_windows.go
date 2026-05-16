@@ -1,12 +1,14 @@
 package update
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
+)
 
-func replaceExecutable(newBinary []byte, expectedSHA256 string) error {
-	if runtime.GOOS != "windows" {
-		return errors.New("windows updater called on non-windows system")
-	}
-
+func replaceExecutable(newBinary []byte) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("executable path: %w", err)
@@ -41,7 +43,7 @@ func replaceExecutable(newBinary []byte, expectedSHA256 string) error {
 }
 
 func writeNewExecutable(dir, exeName string, data []byte) error {
-	newPath := filepath.Join(dir, exeName+NewSuffix)
+	newPath := filepath.Join(dir, exeName+"_"+VERSION+".new")
 
 	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {

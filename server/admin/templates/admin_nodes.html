@@ -38,6 +38,7 @@
 <table>
     <tr>
         <th>Status</th>
+        <th>Node ID</th>
         <th>Client Node IP</th>
         <th>Proxy Link</th>
         <th>Username</th>
@@ -48,6 +49,7 @@
     {{range .Nodes}}
     <tr>
         <td class="{{if .IsActive}}active{{else}}inactive{{end}}">{{if .IsActive}}active{{else}}inactive{{end}}</td>
+        <td><code>{{.ID}}</code></td>
         <td>{{.RemoteAddr}}</td>
         <td>{{if .ProxyLink}}<code>{{.ProxyLink}}</code>{{else}}<span class="muted">waiting for node account</span>{{end}}</td>
         <td>{{if .ProxyUser}}{{.ProxyUser.Username}}{{end}}</td>

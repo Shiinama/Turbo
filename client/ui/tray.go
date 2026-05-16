@@ -18,6 +18,8 @@ func SetupTray(icon []byte) {
 
 	statusItem := systray.AddMenuItem("Status: Reconnecting", "Turbo node connection status")
 	statusItem.Disable()
+	nodeIDItem := systray.AddMenuItem("Node ID: Loading", "This node identity")
+	nodeIDItem.Disable()
 	trafficItem := systray.AddMenuItem("Traffic: 0 B", "Transferred traffic for this run")
 	trafficItem.Disable()
 	versionItem := systray.AddMenuItem("Version: "+update.CurrentVersion(), "Current Turbo version")
@@ -25,6 +27,7 @@ func SetupTray(icon []byte) {
 	checkUpdateItem := systray.AddMenuItem("Check for Updates", "Check and install the latest Turbo version")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Quit the whole app")
+	updateNodeIDItem(nodeIDItem)
 	updateStatusItems(statusItem, trafficItem)
 
 	go func() {
@@ -43,6 +46,16 @@ func SetupTray(icon []byte) {
 			}
 		}
 	}()
+}
+
+func updateNodeIDItem(nodeIDItem *systray.MenuItem) {
+	nodeID, err := quic.NodeID()
+	if err != nil {
+		log.Println("Failed to load node ID:", err)
+		nodeIDItem.SetTitle("Node ID: unavailable")
+		return
+	}
+	nodeIDItem.SetTitle("Node ID: " + nodeID)
 }
 
 func updateStatusItems(statusItem *systray.MenuItem, trafficItem *systray.MenuItem) {

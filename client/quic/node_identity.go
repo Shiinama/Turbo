@@ -20,6 +20,10 @@ func announceNode() error {
 	return SendMessage(&Message{Type: "hello", ID: nodeID})
 }
 
+func NodeID() (string, error) {
+	return getNodeID()
+}
+
 func getNodeID() (string, error) {
 	if id := strings.TrimSpace(os.Getenv("TURBO_NODE_ID")); id != "" {
 		return normalizeNodeID(id), nil

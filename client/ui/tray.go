@@ -1,29 +1,35 @@
 package ui
 
 import (
-	"log"
-	"os/exec"
-	"runtime"
+	"client/quic"
+	"fmt"
+	"time"
 
 	"github.com/getlantern/systray"
 )
 
-func SetupTray(adminURL string, icon []byte) {
-	systray.SetTemplateIcon(icon, icon)
-	systray.SetTooltip("Turbo running")
+const refreshInterval = time.Minute
 
-	dashboard := systray.AddMenuItem("Nodes", "Open server nodes")
+func SetupTray(icon []byte) {
+	systray.SetTemplateIcon(icon, icon)
+	systray.SetTooltip(tooltipText(0))
+
+	statusItem := systray.AddMenuItem("Status: Running", "Turbo node is running")
+	statusItem.Disable()
+	trafficItem := systray.AddMenuItem("Traffic: 0 B", "Transferred traffic for this run")
+	trafficItem.Disable()
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Quit the whole app")
+	updateTrafficItem(trafficItem)
 
 	go func() {
+		ticker := time.NewTicker(refreshInterval)
+		defer ticker.Stop()
+
 		for {
 			select {
-			case <-dashboard.ClickedCh:
-				err := open(adminURL + "/admin/nodes")
-				if err != nil {
-					log.Println("Failed to open browser:", err)
-				}
+			case <-ticker.C:
+				updateTrafficItem(trafficItem)
 			case <-quitItem.ClickedCh:
 				systray.Quit()
 				return
@@ -32,19 +38,29 @@ func SetupTray(adminURL string, icon []byte) {
 	}()
 }
 
-func open(url string) error {
-	var cmd string
-	var args []string
+func updateTrafficItem(item *systray.MenuItem) {
+	total := quic.TrafficSnapshot().TotalBytes
+	formatted := formatBytes(total)
+	item.SetTitle("Traffic: " + formatted)
+	systray.SetTooltip(tooltipText(total))
+}
 
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "rundll32"
-		args = []string{"url.dll,FileProtocolHandler"}
-	case "darwin":
-		cmd = "open"
-	default:
-		cmd = "xdg-open"
+func tooltipText(total uint64) string {
+	return "Turbo node running - " + formatBytes(total) + " transferred"
+}
+
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
 	}
-	args = append(args, url)
-	return exec.Command(cmd, args...).Start()
+
+	value := float64(bytes)
+	for _, suffix := range []string{"KB", "MB", "GB"} {
+		value /= unit
+		if value < unit || suffix == "GB" {
+			return fmt.Sprintf("%.1f %s", value, suffix)
+		}
+	}
+	return fmt.Sprintf("%.1f GB", value)
 }

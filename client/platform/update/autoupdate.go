@@ -12,7 +12,7 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-const VERSION = "0.1.0-experimental"
+var Version = "v0.1.0-dev"
 
 type GitHubRelease struct {
 	TagName string `json:"tag_name"`
@@ -22,9 +22,45 @@ type GitHubRelease struct {
 	} `json:"assets"`
 }
 
-const url = "https://api.github.com/repos/L1shed/Turbo/releases/latest"
+const url = "https://api.github.com/repos/Shiinama/Turbo/releases/latest"
+
+type UpdateResult struct {
+	CurrentVersion string
+	LatestVersion  string
+	Updated        bool
+}
+
+func CurrentVersion() string {
+	return Version
+}
 
 func AutoUpdate() error {
+	_, err := CheckAndUpdate()
+	return err
+}
+
+func CheckAndUpdate() (UpdateResult, error) {
+	return checkAndUpdate(true)
+}
+
+func CheckLatestVersion() (UpdateResult, bool, error) {
+	client := http.Client{
+		Timeout: 10 * time.Second,
+	}
+	result := UpdateResult{CurrentVersion: Version}
+	release, hasUpdate, err := checkForUpdate(client)
+	if err != nil {
+		if strings.Contains(err.Error(), "404") {
+			return result, false, nil
+		}
+		return result, false, fmt.Errorf("checking for updates: %w", err)
+	}
+	result.LatestVersion = release.TagName
+	return result, hasUpdate, nil
+}
+
+func checkAndUpdate(install bool) (UpdateResult, error) {
+	result := UpdateResult{CurrentVersion: Version}
 	client := http.Client{
 		Timeout: 10 * time.Second,
 	}
@@ -32,29 +68,34 @@ func AutoUpdate() error {
 	release, hasUpdate, err := checkForUpdate(client)
 	if err != nil {
 		if strings.Contains(err.Error(), "404") {
-			return nil // No release yet
+			return result, nil // No release yet
 		}
-		return fmt.Errorf("checking for updates: %w", err)
+		return result, fmt.Errorf("checking for updates: %w", err)
 	}
+	result.LatestVersion = release.TagName
 	if !hasUpdate {
-		return nil
+		return result, nil
+	}
+	if !install {
+		return result, nil
 	}
 
 	assetURL, err := findAssetForPlatform(release)
 	if err != nil {
-		return fmt.Errorf("finding asset url: %w", err)
+		return result, fmt.Errorf("finding asset url: %w", err)
 	}
 
 	assetData, err := downloadUpdate(client, assetURL)
 	if err != nil {
-		return fmt.Errorf("downloading update: %w", err)
+		return result, fmt.Errorf("downloading update: %w", err)
 	}
 
 	if err := replaceExecutable(assetData); err != nil {
-		return fmt.Errorf("replacing executable: %w", err)
+		return result, fmt.Errorf("replacing executable: %w", err)
 	}
 
-	return nil
+	result.Updated = true
+	return result, nil
 }
 
 func checkForUpdate(client http.Client) (*GitHubRelease, bool, error) {
@@ -80,15 +121,30 @@ func checkForUpdate(client http.Client) (*GitHubRelease, bool, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return nil, false, fmt.Errorf("decoding release info: %w", err)
 	}
-	hasUpdate := semver.Compare(release.TagName, VERSION) == +1
+	hasUpdate := semver.Compare(normalizeSemver(release.TagName), normalizeSemver(Version)) == +1
 
 	return &release, hasUpdate, nil
+}
+
+func normalizeSemver(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return version
+	}
+	if !strings.HasPrefix(version, "v") {
+		return "v" + version
+	}
+	return version
 }
 
 func findAssetForPlatform(release *GitHubRelease) (string, error) {
 	var assetURL string
 	for _, asset := range release.Assets {
 		assetName := strings.ToLower(asset.Name)
+
+		if !isInstallableAsset(assetName) {
+			continue
+		}
 
 		if strings.Contains(assetName, runtime.GOOS+"-"+runtime.GOARCH) {
 			assetURL = asset.BrowserDownloadURL
@@ -101,6 +157,15 @@ func findAssetForPlatform(release *GitHubRelease) (string, error) {
 	}
 
 	return assetURL, nil
+}
+
+func isInstallableAsset(assetName string) bool {
+	if strings.HasSuffix(assetName, ".sha256") ||
+		strings.HasSuffix(assetName, ".zip") ||
+		strings.HasSuffix(assetName, ".dmg") {
+		return false
+	}
+	return true
 }
 
 func downloadUpdate(client http.Client, url string) ([]byte, error) {

@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"client/platform/update"
 	"client/quic"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -18,6 +20,9 @@ func SetupTray(icon []byte) {
 	statusItem.Disable()
 	trafficItem := systray.AddMenuItem("Traffic: 0 B", "Transferred traffic for this run")
 	trafficItem.Disable()
+	versionItem := systray.AddMenuItem("Version: "+update.CurrentVersion(), "Current Turbo version")
+	versionItem.Disable()
+	checkUpdateItem := systray.AddMenuItem("Check for Updates", "Check and install the latest Turbo version")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Quit the whole app")
 	updateTrafficItem(trafficItem)
@@ -30,6 +35,8 @@ func SetupTray(icon []byte) {
 			select {
 			case <-ticker.C:
 				updateTrafficItem(trafficItem)
+			case <-checkUpdateItem.ClickedCh:
+				go checkForUpdates(checkUpdateItem)
 			case <-quitItem.ClickedCh:
 				systray.Quit()
 				return
@@ -47,6 +54,42 @@ func updateTrafficItem(item *systray.MenuItem) {
 
 func tooltipText(total uint64) string {
 	return "Turbo node running - " + formatBytes(total) + " transferred"
+}
+
+func checkForUpdates(item *systray.MenuItem) {
+	item.SetTitle("Checking for Updates...")
+	item.Disable()
+
+	result, hasUpdate, err := update.CheckLatestVersion()
+	if err != nil {
+		log.Println(err)
+		showTemporaryTitle(item, "Update Check Failed")
+		return
+	}
+	if !hasUpdate {
+		showTemporaryTitle(item, "Up to Date")
+		return
+	}
+
+	item.SetTitle("Installing " + result.LatestVersion + "...")
+	result, err = update.CheckAndUpdate()
+	if err != nil {
+		log.Println(err)
+		showTemporaryTitle(item, "Update Failed")
+		return
+	}
+	if result.Updated {
+		showTemporaryTitle(item, "Update Installed")
+		return
+	}
+	showTemporaryTitle(item, "Up to Date")
+}
+
+func showTemporaryTitle(item *systray.MenuItem, title string) {
+	item.SetTitle(title)
+	time.Sleep(5 * time.Second)
+	item.SetTitle("Check for Updates")
+	item.Enable()
 }
 
 func formatBytes(bytes uint64) string {

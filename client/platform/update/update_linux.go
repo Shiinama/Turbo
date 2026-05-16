@@ -14,8 +14,8 @@ func replaceExecutable(newExecutable []byte) error {
 	exeName := filepath.Base(currentExe)
 
 	dir := filepath.Dir(currentExe)
-	newPath := filepath.Join(dir, exeName+"_"+VERSION+".new")
-	backupPath := filepath.Join(dir, exeName+"_"+VERSION+".old")
+	newPath := filepath.Join(dir, exeName+"_"+Version+".new")
+	backupPath := filepath.Join(dir, exeName+"_"+Version+".old")
 
 	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {

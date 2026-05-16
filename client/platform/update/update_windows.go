@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -43,7 +44,7 @@ func replaceExecutable(newBinary []byte) error {
 }
 
 func writeNewExecutable(dir, exeName string, data []byte) error {
-	newPath := filepath.Join(dir, exeName+"_"+VERSION+".new")
+	newPath := filepath.Join(dir, newExecutableName(exeName))
 
 	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
@@ -61,7 +62,7 @@ func writeNewExecutable(dir, exeName string, data []byte) error {
 func writeUpdateBat(dir, exeName string) error {
 	bat := fmt.Sprintf(`@echo off
 set EXE=%s
-set NEW=%s.new
+set NEW=%s
 set OLD=%s.old
 
 :wait
@@ -78,7 +79,7 @@ rename "%%NEW%%" "%%EXE%%"
 start "" "%%EXE%%"
 del "%%OLD%%"
 del "%%~f0"
-`, exeName, exeName, exeName)
+`, exeName, newExecutableName(exeName), exeName)
 
 	path := filepath.Join(dir, "update.bat")
 	return os.WriteFile(path, []byte(bat), 0644)
@@ -91,4 +92,10 @@ func runUpdater(dir string) error {
 		HideWindow: true,
 	}
 	return cmd.Start()
+}
+
+func newExecutableName(exeName string) string {
+	ext := filepath.Ext(exeName)
+	base := strings.TrimSuffix(exeName, ext)
+	return base + "_" + Version + ".new" + ext
 }

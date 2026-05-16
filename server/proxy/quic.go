@@ -325,7 +325,7 @@ func (c *QuicClient) Save() {
 		return
 	}
 
-	err := database.UpsertNode(database.NodeRecord{
+	record := database.NodeRecord{
 		ID:            c.ID,
 		RemoteAddr:    c.ID,
 		Transport:     c.transport,
@@ -338,17 +338,14 @@ func (c *QuicClient) Save() {
 		ConnectedAt:   c.Stats.ConnectTime,
 		LastSeenAt:    time.Now(),
 		IsActive:      true,
-	})
+	}
+
+	err := database.UpsertNode(record)
 	if err != nil {
 		log.Printf("Failed to save node %s: %v", c.ID, err)
 	}
 
-	_, err = database.EnsureProxyUserForNode(database.NodeRecord{
-		ID:          c.ID,
-		RemoteAddr:  c.ID,
-		CountryCode: c.Stats.CountryCode,
-	})
-	if err != nil {
+	if err = database.EnsureProxyUserForNode(record); err != nil {
 		log.Printf("Failed to ensure proxy user for node %s: %v", c.ID, err)
 	}
 }

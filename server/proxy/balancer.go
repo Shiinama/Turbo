@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"log"
 	"math/rand"
 	"sort"
 	"sync"
@@ -19,29 +18,6 @@ type CountryPool struct {
 	clients           []*QuicClient
 	cumulativeWeights []float64 // Pre-computed for O(log n) selection
 	totalWeight       float64
-}
-
-func FindClient() *QuicClient {
-	if client := FindClientByCountry("global"); client != nil {
-		return client
-	} else {
-		// Logs pool sizes for debugging
-		globalPoolSize := 0
-		if pool, ok := globalClients.Load("global"); ok {
-			globalPool := pool.(*CountryPool)
-			globalPoolSize = len(globalPool.clients)
-		}
-
-		countryPoolSize := 0
-		countryClients.Range(func(key, value any) bool {
-			pool := value.(*CountryPool)
-			countryPoolSize += len(pool.clients)
-			return true
-		})
-
-		log.Printf("DEBUG: No healthy clients found. Global pool size: %d, Country pool size: %d", globalPoolSize, countryPoolSize)
-		return nil
-	}
 }
 
 func FindClientByCountry(countryCode string) *QuicClient {
@@ -113,18 +89,7 @@ func updatePools() {
 	var globalPool CountryPool
 	for _, client := range QuicClients {
 		if client.isHealthy() {
-			weight := client.Metrics.Score
-			if weight < 1 {
-				weight = 1
-			}
-			globalPool.clients = append(globalPool.clients, client)
-			if len(globalPool.cumulativeWeights) == 0 {
-				globalPool.cumulativeWeights = append(globalPool.cumulativeWeights, weight)
-			} else {
-				cumWeight := globalPool.cumulativeWeights[len(globalPool.cumulativeWeights)-1]
-				globalPool.cumulativeWeights = append(globalPool.cumulativeWeights, cumWeight+weight)
-			}
-			globalPool.totalWeight += weight
+			globalPool.add(client)
 		}
 	}
 	globalClients.Store("global", &globalPool)
@@ -140,22 +105,21 @@ func updatePools() {
 			if _, exists := countryMap[country]; !exists {
 				countryMap[country] = &CountryPool{}
 			}
-			pool := countryMap[country]
-			weight := client.Metrics.Score
-			if weight < 1 {
-				weight = 1
-			}
-			pool.clients = append(pool.clients, client)
-			if len(pool.cumulativeWeights) == 0 {
-				pool.cumulativeWeights = append(pool.cumulativeWeights, weight)
-			} else {
-				cumWeight := pool.cumulativeWeights[len(pool.cumulativeWeights)-1]
-				pool.cumulativeWeights = append(pool.cumulativeWeights, cumWeight+weight)
-			}
-			pool.totalWeight += weight
+			countryMap[country].add(client)
 		}
 	}
 	for country, pool := range countryMap {
 		countryClients.Store(country, pool)
 	}
+}
+
+func (p *CountryPool) add(client *QuicClient) {
+	weight := client.Metrics.Score
+	if weight < 1 {
+		weight = 1
+	}
+
+	p.clients = append(p.clients, client)
+	p.totalWeight += weight
+	p.cumulativeWeights = append(p.cumulativeWeights, p.totalWeight)
 }

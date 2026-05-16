@@ -170,30 +170,12 @@ func ListNodes(limit int) ([]NodeRecord, error) {
 	return nodes, err
 }
 
-func CreateProxyUser(user ProxyUser) error {
+func EnsureProxyUserForNode(node NodeRecord) error {
 	if DB == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	if user.CountryCode == "" {
-		user.CountryCode = "global"
-	}
-	if user.MaxConns <= 0 {
-		user.MaxConns = 10
-	}
-
-	_, err := DB.Exec(`
-		INSERT INTO proxy_users (username, password, node_id, country_code, max_conns, is_active, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, user.Username, user.Password, user.NodeID, user.CountryCode, user.MaxConns, user.IsActive, user.Notes)
-	return err
-}
-
-func EnsureProxyUserForNode(node NodeRecord) (*ProxyUser, error) {
-	if DB == nil {
-		return nil, fmt.Errorf("database is not initialized")
-	}
 	if node.ID == "" {
-		return nil, fmt.Errorf("node id is required")
+		return fmt.Errorf("node id is required")
 	}
 
 	nodeKey := stableNodeKey(node)
@@ -214,31 +196,37 @@ func EnsureProxyUserForNode(node NodeRecord) (*ProxyUser, error) {
 			is_active = true,
 			notes = EXCLUDED.notes
 	`, username, password, node.ID, countryCode, 10, notes)
+	return err
+}
+
+func ListNodesWithProxyUsers(limit int) ([]NodeRecord, error) {
+	nodes, err := ListNodes(limit)
 	if err != nil {
 		return nil, err
 	}
-
-	return GetProxyUserByNodeID(node.ID)
-}
-
-func GetProxyUserByNodeID(nodeID string) (*ProxyUser, error) {
-	if DB == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if len(nodes) == 0 {
+		return nodes, nil
 	}
 
-	var user ProxyUser
-	err := DB.Get(&user, `
+	var users []ProxyUser
+	err = DB.Select(&users, `
 		SELECT id, username, password, node_id, country_code, max_conns, is_active,
 		       bytes_sent, bytes_received, notes, created_at, last_used_at
 		FROM proxy_users
-		WHERE node_id = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, nodeID)
+		WHERE node_id != ''
+	`)
 	if err != nil {
 		return nil, err
 	}
-	return &user, nil
+
+	usersByNodeID := make(map[string]*ProxyUser, len(users))
+	for i := range users {
+		usersByNodeID[users[i].NodeID] = &users[i]
+	}
+	for i := range nodes {
+		nodes[i].ProxyUser = usersByNodeID[nodes[i].ID]
+	}
+	return nodes, nil
 }
 
 func stableNodeKey(node NodeRecord) string {
@@ -272,21 +260,6 @@ func stableToken(value string, length int) string {
 		out[i] = alphabet[(hash*2685821657736338717)%uint64(len(alphabet))]
 	}
 	return string(out)
-}
-
-func ListProxyUsers() ([]ProxyUser, error) {
-	if DB == nil {
-		return nil, fmt.Errorf("database is not initialized")
-	}
-
-	var users []ProxyUser
-	err := DB.Select(&users, `
-		SELECT id, username, password, node_id, country_code, max_conns, is_active,
-		       bytes_sent, bytes_received, notes, created_at, last_used_at
-		FROM proxy_users
-		ORDER BY created_at DESC
-	`)
-	return users, err
 }
 
 func AuthenticateProxyUser(username, password string) (*ProxyUser, error) {

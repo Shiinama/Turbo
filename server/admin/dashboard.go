@@ -25,7 +25,7 @@ func AdminNodesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes, err := database.ListNodes(100)
+	nodes, err := database.ListNodesWithProxyUsers(100)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load nodes: %v", err), http.StatusInternalServerError)
 		return
@@ -34,10 +34,8 @@ func AdminNodesHandler(w http.ResponseWriter, r *http.Request) {
 	proxyHost := proxyHost(r)
 	proxyPort := firstEnv("PROXY_PUBLIC_PORT", "SOCKS_PUBLIC_PORT", "SOCKS_PORT")
 	for i := range nodes {
-		user, err := database.GetProxyUserByNodeID(nodes[i].ID)
-		if err == nil && user != nil {
-			nodes[i].ProxyUser = user
-			nodes[i].ProxyLink = proxyLink(proxyHost, proxyPort, *user)
+		if nodes[i].ProxyUser != nil {
+			nodes[i].ProxyLink = proxyLink(proxyHost, proxyPort, *nodes[i].ProxyUser)
 		}
 	}
 
@@ -89,17 +87,4 @@ func checkBasicAuth(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("WWW-Authenticate", `Basic realm="Turbo Admin"`)
 	http.Error(w, "admin authentication required", http.StatusUnauthorized)
 	return false
-}
-
-func formatBytes(bytes uint64) string {
-	const unit = 1000
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := uint64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

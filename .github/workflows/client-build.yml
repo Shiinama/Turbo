@@ -2,18 +2,7 @@ name: Build Client
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-    paths:
-      - 'client/**'
-      - 'build/**'
-      - '.github/workflows/client-build.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'client/**'
-      - 'build/**'
-      - '.github/workflows/client-build.yml'
   release:
     types: [published]
   workflow_dispatch:

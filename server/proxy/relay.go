@@ -28,8 +28,12 @@ func HandleSocksConn(conn net.Conn) {
 
 	host, port, auth, err := socks.HandleSocksHandshake(conn)
 	country := "global"
+	nodeID := ""
 	if auth != nil && auth.CountryCode != "" {
 		country = auth.CountryCode
+	}
+	if auth != nil {
+		nodeID = auth.NodeID
 	}
 
 	if err != nil {
@@ -68,7 +72,10 @@ func HandleSocksConn(conn net.Conn) {
 
 	for !success && attempts < 3 {
 		attempts++
-		client = FindClientByCountry(country)
+		client = FindClientByID(nodeID)
+		if client == nil && nodeID == "" {
+			client = FindClientByCountry(country)
+		}
 		if client == nil {
 			log.Println("No available clients found for this request")
 			return

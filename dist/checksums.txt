@@ -1,0 +1,2 @@
+aa31dca82b6fdf76da6a9907c56e2b537dfc1f4f2dd76a3eca2a28ad0b43bd61  dist/Turbo-windows-amd64.zip
+447954e4a46f4010ed3616877dea68e72734cfc75e2ad1017574604920a4274d  dist/windows/Turbo.exe

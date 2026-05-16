@@ -14,28 +14,15 @@ var templates, _ = template.ParseFiles(
 )
 
 type AdminNodesData struct {
-	Nodes      []database.NodeRecord
-	Users      []database.ProxyUser
-	ProxyHost  string
-	ProxyPort  string
-	NodeURL    string
-	CreateErr  string
-	CreateDone string
+	Nodes     []database.NodeRecord
+	ProxyHost string
+	ProxyPort string
+	NodeURL   string
 }
 
 func AdminNodesHandler(w http.ResponseWriter, r *http.Request) {
 	if !checkBasicAuth(w, r) {
 		return
-	}
-
-	createErr := ""
-	createDone := ""
-	if r.Method == http.MethodPost {
-		if err := createProxyUser(r); err != nil {
-			createErr = err.Error()
-		} else {
-			createDone = "proxy user created"
-		}
 	}
 
 	nodes, err := database.ListNodes(100)
@@ -44,20 +31,21 @@ func AdminNodesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users, err := database.ListProxyUsers()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load proxy users: %v", err), http.StatusInternalServerError)
-		return
+	proxyHost := proxyHost(r)
+	proxyPort := firstEnv("PROXY_PUBLIC_PORT", "SOCKS_PUBLIC_PORT", "SOCKS_PORT")
+	for i := range nodes {
+		user, err := database.GetProxyUserByNodeID(nodes[i].ID)
+		if err == nil && user != nil {
+			nodes[i].ProxyUser = user
+			nodes[i].ProxyLink = proxyLink(proxyHost, proxyPort, *user)
+		}
 	}
 
 	err = templates.ExecuteTemplate(w, "admin_nodes.html", AdminNodesData{
-		Nodes:      nodes,
-		Users:      users,
-		ProxyHost:  proxyHost(r),
-		ProxyPort:  firstEnv("PROXY_PUBLIC_PORT", "SOCKS_PUBLIC_PORT", "SOCKS_PORT"),
-		NodeURL:    os.Getenv("TURBO_NODE_URL"),
-		CreateErr:  createErr,
-		CreateDone: createDone,
+		Nodes:     nodes,
+		ProxyHost: proxyHost,
+		ProxyPort: proxyPort,
+		NodeURL:   os.Getenv("TURBO_NODE_URL"),
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal Server Error: %v", err), http.StatusInternalServerError)
@@ -85,37 +73,11 @@ func proxyHost(r *http.Request) string {
 	return r.Host
 }
 
-func createProxyUser(r *http.Request) error {
-	if err := r.ParseForm(); err != nil {
-		return err
+func proxyLink(host string, port string, user database.ProxyUser) string {
+	if host == "" || port == "" {
+		return ""
 	}
-
-	username := r.FormValue("username")
-	password := r.FormValue("password")
-	if username == "" || password == "" {
-		return fmt.Errorf("username and password are required")
-	}
-
-	countryCode := r.FormValue("country_code")
-	if countryCode == "" {
-		countryCode = "global"
-	}
-
-	maxConns := 10
-	if value := r.FormValue("max_conns"); value != "" {
-		if _, err := fmt.Sscanf(value, "%d", &maxConns); err != nil {
-			return fmt.Errorf("invalid max connections")
-		}
-	}
-
-	return database.CreateProxyUser(database.ProxyUser{
-		Username:    username,
-		Password:    password,
-		CountryCode: countryCode,
-		MaxConns:    maxConns,
-		IsActive:    r.FormValue("is_active") != "",
-		Notes:       r.FormValue("notes"),
-	})
+	return fmt.Sprintf("socks5://%s:%s@%s:%s", user.Username, user.Password, host, port)
 }
 
 func checkBasicAuth(w http.ResponseWriter, r *http.Request) bool {

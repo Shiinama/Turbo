@@ -64,6 +64,21 @@ func FindClientByCountry(countryCode string) *QuicClient {
 	return nil
 }
 
+func FindClientByID(id string) *QuicClient {
+	if id == "" {
+		return nil
+	}
+
+	QuicMutex.RLock()
+	client := QuicClients[id]
+	QuicMutex.RUnlock()
+
+	if client != nil && client.isHealthy() {
+		return client
+	}
+	return nil
+}
+
 func selectFromPool(pool *CountryPool) *QuicClient {
 	if pool.totalWeight == 0 || len(pool.clients) == 0 {
 		return nil

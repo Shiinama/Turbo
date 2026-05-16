@@ -10,6 +10,7 @@ import (
 
 type AuthResult struct {
 	UserID      int64
+	NodeID      string
 	CountryCode string
 }
 
@@ -56,5 +57,9 @@ func Authenticate(conn net.Conn) (*AuthResult, error) {
 
 	conn.Write([]byte{0x01, SuccessReply})
 
-	return &AuthResult{UserID: proxyUser.ID, CountryCode: proxyUser.CountryCode}, nil
+	return &AuthResult{
+		UserID:      proxyUser.ID,
+		NodeID:      proxyUser.NodeID,
+		CountryCode: proxyUser.CountryCode,
+	}, nil
 }

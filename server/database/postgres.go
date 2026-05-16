@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"time"
 
@@ -24,12 +25,15 @@ type NodeRecord struct {
 	ConnectedAt   time.Time `db:"connected_at"`
 	LastSeenAt    time.Time `db:"last_seen_at"`
 	IsActive      bool      `db:"is_active"`
+	ProxyUser     *ProxyUser
+	ProxyLink     string
 }
 
 type ProxyUser struct {
 	ID          int64      `db:"id"`
 	Username    string     `db:"username"`
 	Password    string     `db:"password"`
+	NodeID      string     `db:"node_id"`
 	CountryCode string     `db:"country_code"`
 	MaxConns    int        `db:"max_conns"`
 	BytesSent   uint64     `db:"bytes_sent"`
@@ -98,7 +102,8 @@ func migrate() error {
 	_, err = DB.Exec(`
 		ALTER TABLE proxy_users
 		ADD COLUMN IF NOT EXISTS bytes_sent BIGINT NOT NULL DEFAULT 0,
-		ADD COLUMN IF NOT EXISTS bytes_received BIGINT NOT NULL DEFAULT 0
+		ADD COLUMN IF NOT EXISTS bytes_received BIGINT NOT NULL DEFAULT 0,
+		ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT ''
 	`)
 	return err
 }
@@ -177,10 +182,96 @@ func CreateProxyUser(user ProxyUser) error {
 	}
 
 	_, err := DB.Exec(`
-		INSERT INTO proxy_users (username, password, country_code, max_conns, is_active, notes)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, user.Username, user.Password, user.CountryCode, user.MaxConns, user.IsActive, user.Notes)
+		INSERT INTO proxy_users (username, password, node_id, country_code, max_conns, is_active, notes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, user.Username, user.Password, user.NodeID, user.CountryCode, user.MaxConns, user.IsActive, user.Notes)
 	return err
+}
+
+func EnsureProxyUserForNode(node NodeRecord) (*ProxyUser, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+	if node.ID == "" {
+		return nil, fmt.Errorf("node id is required")
+	}
+
+	nodeKey := stableNodeKey(node)
+	username := "node-" + stableToken(nodeKey, 10)
+	password := stableToken(nodeKey+":proxy-password", 18)
+	notes := "auto-created for client node " + node.RemoteAddr
+	countryCode := node.CountryCode
+	if countryCode == "" {
+		countryCode = "global"
+	}
+
+	_, err := DB.Exec(`
+		INSERT INTO proxy_users (username, password, node_id, country_code, max_conns, is_active, notes)
+		VALUES ($1, $2, $3, $4, $5, true, $6)
+		ON CONFLICT (username) DO UPDATE SET
+			node_id = EXCLUDED.node_id,
+			country_code = EXCLUDED.country_code,
+			is_active = true,
+			notes = EXCLUDED.notes
+	`, username, password, node.ID, countryCode, 10, notes)
+	if err != nil {
+		return nil, err
+	}
+
+	return GetProxyUserByNodeID(node.ID)
+}
+
+func GetProxyUserByNodeID(nodeID string) (*ProxyUser, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	var user ProxyUser
+	err := DB.Get(&user, `
+		SELECT id, username, password, node_id, country_code, max_conns, is_active,
+		       bytes_sent, bytes_received, notes, created_at, last_used_at
+		FROM proxy_users
+		WHERE node_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func stableNodeKey(node NodeRecord) string {
+	addr := node.RemoteAddr
+	if addr == "" {
+		addr = node.ID
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+		return host
+	}
+	return addr
+}
+
+func stableToken(value string, length int) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+	if length <= 0 {
+		length = 12
+	}
+
+	hash := uint64(1469598103934665603)
+	for i := 0; i < len(value); i++ {
+		hash ^= uint64(value[i])
+		hash *= 1099511628211
+	}
+
+	out := make([]byte, length)
+	for i := 0; i < length; i++ {
+		hash ^= hash >> 12
+		hash ^= hash << 25
+		hash ^= hash >> 27
+		out[i] = alphabet[(hash*2685821657736338717)%uint64(len(alphabet))]
+	}
+	return string(out)
 }
 
 func ListProxyUsers() ([]ProxyUser, error) {
@@ -190,7 +281,7 @@ func ListProxyUsers() ([]ProxyUser, error) {
 
 	var users []ProxyUser
 	err := DB.Select(&users, `
-		SELECT id, username, password, country_code, max_conns, is_active,
+		SELECT id, username, password, node_id, country_code, max_conns, is_active,
 		       bytes_sent, bytes_received, notes, created_at, last_used_at
 		FROM proxy_users
 		ORDER BY created_at DESC
@@ -205,7 +296,7 @@ func AuthenticateProxyUser(username, password string) (*ProxyUser, error) {
 
 	var user ProxyUser
 	err := DB.Get(&user, `
-		SELECT id, username, password, country_code, max_conns, is_active,
+		SELECT id, username, password, node_id, country_code, max_conns, is_active,
 		       bytes_sent, bytes_received, notes, created_at, last_used_at
 		FROM proxy_users
 		WHERE username = $1 AND password = $2 AND is_active = true

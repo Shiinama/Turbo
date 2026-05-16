@@ -342,4 +342,13 @@ func (c *QuicClient) Save() {
 	if err != nil {
 		log.Printf("Failed to save node %s: %v", c.ID, err)
 	}
+
+	_, err = database.EnsureProxyUserForNode(database.NodeRecord{
+		ID:          c.ID,
+		RemoteAddr:  c.ID,
+		CountryCode: c.Stats.CountryCode,
+	})
+	if err != nil {
+		log.Printf("Failed to ensure proxy user for node %s: %v", c.ID, err)
+	}
 }

@@ -20,18 +20,13 @@ type ClientStats struct {
 	ActiveConns   int32
 	BytesSent     uint64
 	BytesReceived uint64
-	CountryCode   string
 }
 
 func HandleSocksConn(conn net.Conn) {
 	defer conn.Close()
 
 	host, port, auth, err := socks.HandleSocksHandshake(conn)
-	country := "global"
 	nodeID := ""
-	if auth != nil && auth.CountryCode != "" {
-		country = auth.CountryCode
-	}
 	if auth != nil {
 		nodeID = auth.NodeID
 	}
@@ -72,7 +67,7 @@ func HandleSocksConn(conn net.Conn) {
 
 	for !success && attempts < 3 {
 		attempts++
-		client = findClientForProxyUser(nodeID, country)
+		client = findClientForProxyUser(nodeID)
 		if client == nil {
 			log.Println("No available clients found for this request")
 			return
@@ -123,11 +118,11 @@ func HandleSocksConn(conn net.Conn) {
 	conn.Write([]byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
 }
 
-func findClientForProxyUser(nodeID, country string) *QuicClient {
+func findClientForProxyUser(nodeID string) *QuicClient {
 	if nodeID != "" {
 		return FindClientByID(nodeID)
 	}
-	return FindClientByCountry(country)
+	return FindClient()
 }
 
 func relayFromSocksToQuic(client *QuicClient, pc *Connection) {

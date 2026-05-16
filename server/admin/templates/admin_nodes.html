@@ -41,7 +41,6 @@
         <th>Proxy Link</th>
         <th>Username</th>
         <th>Password</th>
-        <th>Country</th>
         <th>Active Connections</th>
         <th>Bytes Sent</th>
         <th>Bytes Received</th>
@@ -56,7 +55,6 @@
         <td>{{if .ProxyLink}}<code>{{.ProxyLink}}</code>{{else}}<span class="muted">waiting for node account</span>{{end}}</td>
         <td>{{if .ProxyUser}}{{.ProxyUser.Username}}{{end}}</td>
         <td>{{if .ProxyUser}}{{.ProxyUser.Password}}{{end}}</td>
-        <td>{{.CountryCode}}</td>
         <td>{{.ActiveConns}}</td>
         <td>{{.BytesSent}}</td>
         <td>{{.BytesReceived}}</td>

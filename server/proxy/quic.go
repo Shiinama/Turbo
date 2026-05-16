@@ -4,12 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"server/database"
-	"server/proxy/user"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -103,12 +101,6 @@ func handleNodeConnection(conn net.Conn) {
 
 	go quicReader(client)
 
-	country := "global"
-	if ip, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-		country = countryForIP(ip)
-	}
-	client.Stats.CountryCode = country
-
 	updatePools()
 	client.Save()
 }
@@ -144,12 +136,6 @@ func HandleNodeWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	go quicReader(client)
 
-	country := "global"
-	if ip, _, err := net.SplitHostPort(clientID); err == nil {
-		country = countryForIP(ip)
-	}
-	client.Stats.CountryCode = country
-
 	updatePools()
 	client.Save()
 }
@@ -170,27 +156,6 @@ func forwardedRemoteAddr(r *http.Request) string {
 		return ip
 	}
 	return net.JoinHostPort(ip, port)
-}
-
-func countryForIP(ip string) string {
-	country := "global"
-	resp, err := http.Get("http://ip-api.com/csv/" + ip + "?fields=countryCode")
-	if err != nil {
-		return country
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return country
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return country
-	}
-	bodyCountry := string(body)
-	if user.IsValidCountryCode(bodyCountry) {
-		return bodyCountry
-	}
-	return country
 }
 
 func quicReader(client *QuicClient) {
@@ -329,7 +294,6 @@ func (c *QuicClient) Save() {
 		ID:            c.ID,
 		RemoteAddr:    c.ID,
 		Transport:     c.transport,
-		CountryCode:   c.Stats.CountryCode,
 		ActiveConns:   atomic.LoadInt32(&c.Stats.ActiveConns),
 		BytesSent:     atomic.LoadUint64(&c.Stats.BytesSent),
 		BytesReceived: atomic.LoadUint64(&c.Stats.BytesReceived),

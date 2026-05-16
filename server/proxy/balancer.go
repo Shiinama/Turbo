@@ -7,37 +7,20 @@ import (
 )
 
 var (
-	// Lock-free reads with sync.Map
-	countryClients sync.Map // 2-digit country code -> *CountryPool
-	globalClients  sync.Map // "global" -> *CountryPool
-
+	globalClientPool ClientPool
 	updateMutex sync.RWMutex
 )
 
-type CountryPool struct {
+type ClientPool struct {
 	clients           []*QuicClient
 	cumulativeWeights []float64 // Pre-computed for O(log n) selection
 	totalWeight       float64
 }
 
-func FindClientByCountry(countryCode string) *QuicClient {
-	var pool interface{}
-	var ok bool
-
-	if countryCode == "global" {
-		pool, ok = globalClients.Load(countryCode)
-	} else {
-		pool, ok = countryClients.Load(countryCode)
-	}
-
-	if ok {
-		countryPool := pool.(*CountryPool)
-		if client := selectFromPool(countryPool); client != nil {
-			return client
-		}
-	}
-
-	return nil
+func FindClient() *QuicClient {
+	updateMutex.RLock()
+	defer updateMutex.RUnlock()
+	return selectFromPool(&globalClientPool)
 }
 
 func FindClientByID(id string) *QuicClient {
@@ -55,7 +38,7 @@ func FindClientByID(id string) *QuicClient {
 	return nil
 }
 
-func selectFromPool(pool *CountryPool) *QuicClient {
+func selectFromPool(pool *ClientPool) *QuicClient {
 	if pool.totalWeight == 0 || len(pool.clients) == 0 {
 		return nil
 	}
@@ -86,34 +69,16 @@ func updatePools() {
 	updateMutex.Lock()
 	defer updateMutex.Unlock()
 
-	var globalPool CountryPool
+	var globalPool ClientPool
 	for _, client := range QuicClients {
 		if client.isHealthy() {
 			globalPool.add(client)
 		}
 	}
-	globalClients.Store("global", &globalPool)
-
-	countryMap := make(map[string]*CountryPool)
-	for _, client := range QuicClients {
-		if client.isHealthy() {
-			country := client.Stats.CountryCode
-			if country == "global" {
-				continue
-			}
-
-			if _, exists := countryMap[country]; !exists {
-				countryMap[country] = &CountryPool{}
-			}
-			countryMap[country].add(client)
-		}
-	}
-	for country, pool := range countryMap {
-		countryClients.Store(country, pool)
-	}
+	globalClientPool = globalPool
 }
 
-func (p *CountryPool) add(client *QuicClient) {
+func (p *ClientPool) add(client *QuicClient) {
 	weight := client.Metrics.Score
 	if weight < 1 {
 		weight = 1

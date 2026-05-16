@@ -16,7 +16,6 @@ type NodeRecord struct {
 	ID            string    `db:"id"`
 	RemoteAddr    string    `db:"remote_addr"`
 	Transport     string    `db:"transport"`
-	CountryCode   string    `db:"country_code"`
 	ActiveConns   int32     `db:"active_conns"`
 	BytesSent     uint64    `db:"bytes_sent"`
 	BytesReceived uint64    `db:"bytes_received"`
@@ -30,18 +29,17 @@ type NodeRecord struct {
 }
 
 type ProxyUser struct {
-	ID          int64      `db:"id"`
-	Username    string     `db:"username"`
-	Password    string     `db:"password"`
-	NodeID      string     `db:"node_id"`
-	CountryCode string     `db:"country_code"`
-	MaxConns    int        `db:"max_conns"`
-	BytesSent   uint64     `db:"bytes_sent"`
-	BytesRecv   uint64     `db:"bytes_received"`
-	IsActive    bool       `db:"is_active"`
-	Notes       string     `db:"notes"`
-	CreatedAt   time.Time  `db:"created_at"`
-	LastUsedAt  *time.Time `db:"last_used_at"`
+	ID         int64      `db:"id"`
+	Username   string     `db:"username"`
+	Password   string     `db:"password"`
+	NodeID     string     `db:"node_id"`
+	MaxConns   int        `db:"max_conns"`
+	BytesSent  uint64     `db:"bytes_sent"`
+	BytesRecv  uint64     `db:"bytes_received"`
+	IsActive   bool       `db:"is_active"`
+	Notes      string     `db:"notes"`
+	CreatedAt  time.Time  `db:"created_at"`
+	LastUsedAt *time.Time `db:"last_used_at"`
 }
 
 func InitPostgres() error {
@@ -65,7 +63,6 @@ func migrate() error {
 			id TEXT PRIMARY KEY,
 			remote_addr TEXT NOT NULL,
 			transport TEXT NOT NULL,
-			country_code TEXT NOT NULL DEFAULT 'global',
 			active_conns INTEGER NOT NULL DEFAULT 0,
 			bytes_sent BIGINT NOT NULL DEFAULT 0,
 			bytes_received BIGINT NOT NULL DEFAULT 0,
@@ -85,7 +82,6 @@ func migrate() error {
 			id BIGSERIAL PRIMARY KEY,
 			username TEXT NOT NULL UNIQUE,
 			password TEXT NOT NULL,
-			country_code TEXT NOT NULL DEFAULT 'global',
 			max_conns INTEGER NOT NULL DEFAULT 10,
 			bytes_sent BIGINT NOT NULL DEFAULT 0,
 			bytes_received BIGINT NOT NULL DEFAULT 0,
@@ -105,6 +101,14 @@ func migrate() error {
 		ADD COLUMN IF NOT EXISTS bytes_received BIGINT NOT NULL DEFAULT 0,
 		ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT ''
 	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = DB.Exec(`
+		ALTER TABLE nodes DROP COLUMN IF EXISTS country_code;
+		ALTER TABLE proxy_users DROP COLUMN IF EXISTS country_code;
+	`)
 	return err
 }
 
@@ -115,15 +119,14 @@ func UpsertNode(record NodeRecord) error {
 
 	_, err := DB.Exec(`
 		INSERT INTO nodes (
-			id, remote_addr, transport, country_code, active_conns,
+			id, remote_addr, transport, active_conns,
 			bytes_sent, bytes_received, score, latency, connected_at,
 			last_seen_at, is_active
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO UPDATE SET
 			remote_addr = EXCLUDED.remote_addr,
 			transport = EXCLUDED.transport,
-			country_code = EXCLUDED.country_code,
 			active_conns = EXCLUDED.active_conns,
 			bytes_sent = EXCLUDED.bytes_sent,
 			bytes_received = EXCLUDED.bytes_received,
@@ -131,7 +134,7 @@ func UpsertNode(record NodeRecord) error {
 			latency = EXCLUDED.latency,
 			last_seen_at = EXCLUDED.last_seen_at,
 			is_active = EXCLUDED.is_active
-	`, record.ID, record.RemoteAddr, record.Transport, record.CountryCode, record.ActiveConns,
+	`, record.ID, record.RemoteAddr, record.Transport, record.ActiveConns,
 		record.BytesSent, record.BytesReceived, record.Score, record.Latency, record.ConnectedAt,
 		record.LastSeenAt, record.IsActive)
 	return err
@@ -160,7 +163,7 @@ func ListNodes(limit int) ([]NodeRecord, error) {
 
 	var nodes []NodeRecord
 	err := DB.Select(&nodes, `
-		SELECT id, remote_addr, transport, country_code, active_conns,
+		SELECT id, remote_addr, transport, active_conns,
 		       bytes_sent, bytes_received, score, latency, connected_at,
 		       last_seen_at, is_active
 		FROM nodes
@@ -182,20 +185,15 @@ func EnsureProxyUserForNode(node NodeRecord) error {
 	username := "node-" + stableToken(nodeKey, 10)
 	password := stableToken(nodeKey+":proxy-password", 18)
 	notes := "auto-created for client node " + node.RemoteAddr
-	countryCode := node.CountryCode
-	if countryCode == "" {
-		countryCode = "global"
-	}
 
 	_, err := DB.Exec(`
-		INSERT INTO proxy_users (username, password, node_id, country_code, max_conns, is_active, notes)
-		VALUES ($1, $2, $3, $4, $5, true, $6)
+		INSERT INTO proxy_users (username, password, node_id, max_conns, is_active, notes)
+		VALUES ($1, $2, $3, $4, true, $5)
 		ON CONFLICT (username) DO UPDATE SET
 			node_id = EXCLUDED.node_id,
-			country_code = EXCLUDED.country_code,
 			is_active = true,
 			notes = EXCLUDED.notes
-	`, username, password, node.ID, countryCode, 10, notes)
+	`, username, password, node.ID, 10, notes)
 	return err
 }
 
@@ -210,7 +208,7 @@ func ListNodesWithProxyUsers(limit int) ([]NodeRecord, error) {
 
 	var users []ProxyUser
 	err = DB.Select(&users, `
-		SELECT id, username, password, node_id, country_code, max_conns, is_active,
+		SELECT id, username, password, node_id, max_conns, is_active,
 		       bytes_sent, bytes_received, notes, created_at, last_used_at
 		FROM proxy_users
 		WHERE node_id != ''
@@ -269,7 +267,7 @@ func AuthenticateProxyUser(username, password string) (*ProxyUser, error) {
 
 	var user ProxyUser
 	err := DB.Get(&user, `
-		SELECT id, username, password, node_id, country_code, max_conns, is_active,
+		SELECT id, username, password, node_id, max_conns, is_active,
 		       bytes_sent, bytes_received, notes, created_at, last_used_at
 		FROM proxy_users
 		WHERE username = $1 AND password = $2 AND is_active = true

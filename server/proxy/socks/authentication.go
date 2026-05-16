@@ -9,9 +9,8 @@ import (
 )
 
 type AuthResult struct {
-	UserID      int64
-	NodeID      string
-	CountryCode string
+	UserID int64
+	NodeID string
 }
 
 func Authenticate(conn net.Conn) (*AuthResult, error) {
@@ -58,8 +57,7 @@ func Authenticate(conn net.Conn) (*AuthResult, error) {
 	conn.Write([]byte{0x01, SuccessReply})
 
 	return &AuthResult{
-		UserID:      proxyUser.ID,
-		NodeID:      proxyUser.NodeID,
-		CountryCode: proxyUser.CountryCode,
+		UserID: proxyUser.ID,
+		NodeID: proxyUser.NodeID,
 	}, nil
 }

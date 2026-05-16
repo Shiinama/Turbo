@@ -41,7 +41,7 @@ jobs:
             target: macos
             goos: darwin
             goarch: arm64
-            asset_name: Turbo-macos-arm64.zip
+            asset_name: Turbo-macos-arm64.dmg
 
     runs-on: ${{ matrix.os }}
 
@@ -81,7 +81,18 @@ jobs:
           cp build/Turbo.app/Contents/Info.plist dist/macos/Turbo.app/Contents/Info.plist
           cp build/assets/icon.icns dist/macos/Turbo.app/Contents/Resources/icon.icns
           chmod +x dist/macos/Turbo.app/Contents/MacOS/Turbo
-          ditto -c -k --keepParent dist/macos/Turbo.app "dist/${{ matrix.asset_name }}"
+          codesign --force --deep --sign - dist/macos/Turbo.app
+
+          mkdir -p dist/dmg-root
+          cp -R dist/macos/Turbo.app dist/dmg-root/Turbo.app
+          ln -s /Applications dist/dmg-root/Applications
+
+          hdiutil create \
+            -volname "Turbo" \
+            -srcfolder dist/dmg-root \
+            -ov \
+            -format UDZO \
+            "dist/${{ matrix.asset_name }}"
 
       - name: Create checksum
         shell: bash

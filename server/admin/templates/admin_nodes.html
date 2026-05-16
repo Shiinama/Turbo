@@ -16,6 +16,7 @@
         .inactive { color: #9a3412; }
         .muted { color: #64748b; }
         .warn { color: #9a3412; }
+        .traffic { font-weight: bold; }
         code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
     </style>
 </head>
@@ -41,11 +42,7 @@
         <th>Proxy Link</th>
         <th>Username</th>
         <th>Password</th>
-        <th>Active Connections</th>
-        <th>Bytes Sent</th>
-        <th>Bytes Received</th>
-        <th>Score</th>
-        <th>Latency</th>
+        <th>Outbound Traffic</th>
         <th>Last Seen</th>
     </tr>
     {{range .Nodes}}
@@ -55,11 +52,7 @@
         <td>{{if .ProxyLink}}<code>{{.ProxyLink}}</code>{{else}}<span class="muted">waiting for node account</span>{{end}}</td>
         <td>{{if .ProxyUser}}{{.ProxyUser.Username}}{{end}}</td>
         <td>{{if .ProxyUser}}{{.ProxyUser.Password}}{{end}}</td>
-        <td>{{.ActiveConns}}</td>
-        <td>{{.BytesSent}}</td>
-        <td>{{.BytesReceived}}</td>
-        <td>{{printf "%.0f" .Score}}/100</td>
-        <td>{{printf "%.1f ms" .Latency}}</td>
+        <td class="traffic">{{.OutboundBytes}} bytes</td>
         <td>{{.LastSeenAt}}</td>
     </tr>
     {{end}}

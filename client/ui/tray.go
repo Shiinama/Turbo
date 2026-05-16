@@ -12,7 +12,7 @@ func SetupTray(adminURL string, icon []byte) {
 	systray.SetTemplateIcon(icon, icon)
 	systray.SetTooltip("Turbo running")
 
-	dashboard := systray.AddMenuItem("Stats", "Open server stats")
+	dashboard := systray.AddMenuItem("Nodes", "Open server nodes")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Quit the whole app")
 

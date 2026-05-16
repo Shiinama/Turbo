@@ -2,7 +2,6 @@ package database
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"time"
 
@@ -16,11 +15,7 @@ type NodeRecord struct {
 	ID            string    `db:"id"`
 	RemoteAddr    string    `db:"remote_addr"`
 	Transport     string    `db:"transport"`
-	ActiveConns   int32     `db:"active_conns"`
-	BytesSent     uint64    `db:"bytes_sent"`
-	BytesReceived uint64    `db:"bytes_received"`
-	Score         float64   `db:"score"`
-	Latency       float64   `db:"latency"`
+	OutboundBytes uint64    `db:"outbound_bytes"`
 	ConnectedAt   time.Time `db:"connected_at"`
 	LastSeenAt    time.Time `db:"last_seen_at"`
 	IsActive      bool      `db:"is_active"`
@@ -63,15 +58,27 @@ func migrate() error {
 			id TEXT PRIMARY KEY,
 			remote_addr TEXT NOT NULL,
 			transport TEXT NOT NULL,
-			active_conns INTEGER NOT NULL DEFAULT 0,
-			bytes_sent BIGINT NOT NULL DEFAULT 0,
-			bytes_received BIGINT NOT NULL DEFAULT 0,
-			score DOUBLE PRECISION NOT NULL DEFAULT 0,
-			latency DOUBLE PRECISION NOT NULL DEFAULT 0,
+			outbound_bytes BIGINT NOT NULL DEFAULT 0,
 			connected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			is_active BOOLEAN NOT NULL DEFAULT true
 		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = DB.Exec(`
+		ALTER TABLE nodes
+		ADD COLUMN IF NOT EXISTS outbound_bytes BIGINT NOT NULL DEFAULT 0;
+
+		ALTER TABLE nodes
+		DROP COLUMN IF EXISTS active_conns,
+		DROP COLUMN IF EXISTS bytes_sent,
+		DROP COLUMN IF EXISTS bytes_received,
+		DROP COLUMN IF EXISTS score,
+		DROP COLUMN IF EXISTS latency,
+		DROP COLUMN IF EXISTS country_code;
 	`)
 	if err != nil {
 		return err
@@ -99,14 +106,8 @@ func migrate() error {
 		ALTER TABLE proxy_users
 		ADD COLUMN IF NOT EXISTS bytes_sent BIGINT NOT NULL DEFAULT 0,
 		ADD COLUMN IF NOT EXISTS bytes_received BIGINT NOT NULL DEFAULT 0,
-		ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT ''
-	`)
-	if err != nil {
-		return err
-	}
+		ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT '';
 
-	_, err = DB.Exec(`
-		ALTER TABLE nodes DROP COLUMN IF EXISTS country_code;
 		ALTER TABLE proxy_users DROP COLUMN IF EXISTS country_code;
 	`)
 	return err
@@ -119,23 +120,17 @@ func UpsertNode(record NodeRecord) error {
 
 	_, err := DB.Exec(`
 		INSERT INTO nodes (
-			id, remote_addr, transport, active_conns,
-			bytes_sent, bytes_received, score, latency, connected_at,
+			id, remote_addr, transport, outbound_bytes, connected_at,
 			last_seen_at, is_active
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET
 			remote_addr = EXCLUDED.remote_addr,
 			transport = EXCLUDED.transport,
-			active_conns = EXCLUDED.active_conns,
-			bytes_sent = EXCLUDED.bytes_sent,
-			bytes_received = EXCLUDED.bytes_received,
-			score = EXCLUDED.score,
-			latency = EXCLUDED.latency,
+			outbound_bytes = EXCLUDED.outbound_bytes,
 			last_seen_at = EXCLUDED.last_seen_at,
 			is_active = EXCLUDED.is_active
-	`, record.ID, record.RemoteAddr, record.Transport, record.ActiveConns,
-		record.BytesSent, record.BytesReceived, record.Score, record.Latency, record.ConnectedAt,
+	`, record.ID, record.RemoteAddr, record.Transport, record.OutboundBytes, record.ConnectedAt,
 		record.LastSeenAt, record.IsActive)
 	return err
 }
@@ -147,7 +142,7 @@ func MarkNodeInactive(id string) error {
 
 	_, err := DB.Exec(`
 		UPDATE nodes
-		SET is_active = false, active_conns = 0, last_seen_at = now()
+		SET is_active = false, last_seen_at = now()
 		WHERE id = $1
 	`, id)
 	return err
@@ -163,9 +158,8 @@ func ListNodes(limit int) ([]NodeRecord, error) {
 
 	var nodes []NodeRecord
 	err := DB.Select(&nodes, `
-		SELECT id, remote_addr, transport, active_conns,
-		       bytes_sent, bytes_received, score, latency, connected_at,
-		       last_seen_at, is_active
+		SELECT id, remote_addr, transport, outbound_bytes,
+		       connected_at, last_seen_at, is_active
 		FROM nodes
 		ORDER BY last_seen_at DESC
 		LIMIT $1
@@ -228,14 +222,7 @@ func ListNodesWithProxyUsers(limit int) ([]NodeRecord, error) {
 }
 
 func stableNodeKey(node NodeRecord) string {
-	addr := node.RemoteAddr
-	if addr == "" {
-		addr = node.ID
-	}
-	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
-		return host
-	}
-	return addr
+	return node.ID
 }
 
 func stableToken(value string, length int) string {

@@ -34,6 +34,7 @@ var (
 // QuicClient represents a connected QUIC client
 type QuicClient struct {
 	ID         string
+	RemoteAddr string
 	conn       net.Conn
 	wsConn     *websocket.Conn
 	transport  string
@@ -42,7 +43,6 @@ type QuicClient struct {
 	userMutex  sync.Mutex
 	lastPing   time.Time
 	lastPingID string
-	Metrics    *Metrics
 	Stats      *ClientStats
 	kicked     atomic.Bool
 }
@@ -77,32 +77,21 @@ func acceptNodeConnections(listener net.Listener) {
 }
 
 func handleNodeConnection(conn net.Conn) {
-	clientID := conn.RemoteAddr().String()
-	log.Printf("New node client connected: %s", clientID)
+	remoteAddr := conn.RemoteAddr().String()
+	log.Printf("New node client connected: %s", remoteAddr)
 
 	client := &QuicClient{
-		ID:        clientID,
-		conn:      conn,
-		transport: "tcp",
-		userConns: make(map[string]*Connection),
-		lastPing:  time.Now(),
-		Metrics: &Metrics{
-			Reliability: 0.7,
-			Score:       50,
-		},
+		RemoteAddr: remoteAddr,
+		conn:       conn,
+		transport:  "tcp",
+		userConns:  make(map[string]*Connection),
+		lastPing:   time.Now(),
 		Stats: &ClientStats{
 			ConnectTime: time.Now(),
 		},
 	}
 
-	QuicMutex.Lock()
-	QuicClients[clientID] = client
-	QuicMutex.Unlock()
-
 	go quicReader(client)
-
-	updatePools()
-	client.Save()
 }
 
 func HandleNodeWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -112,32 +101,21 @@ func HandleNodeWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID := forwardedRemoteAddr(r)
-	log.Printf("New websocket node client connected: %s", clientID)
+	remoteAddr := forwardedRemoteAddr(r)
+	log.Printf("New websocket node client connected: %s", remoteAddr)
 
 	client := &QuicClient{
-		ID:        clientID,
-		wsConn:    conn,
-		transport: "websocket",
-		userConns: make(map[string]*Connection),
-		lastPing:  time.Now(),
-		Metrics: &Metrics{
-			Reliability: 0.7,
-			Score:       50,
-		},
+		RemoteAddr: remoteAddr,
+		wsConn:     conn,
+		transport:  "websocket",
+		userConns:  make(map[string]*Connection),
+		lastPing:   time.Now(),
 		Stats: &ClientStats{
 			ConnectTime: time.Now(),
 		},
 	}
 
-	QuicMutex.Lock()
-	QuicClients[clientID] = client
-	QuicMutex.Unlock()
-
 	go quicReader(client)
-
-	updatePools()
-	client.Save()
 }
 
 func forwardedRemoteAddr(r *http.Request) string {
@@ -160,16 +138,31 @@ func forwardedRemoteAddr(r *http.Request) string {
 
 func quicReader(client *QuicClient) {
 	defer func() {
-		QuicMutex.Lock()
-		delete(QuicClients, client.ID)
-		log.Printf("Node client disconnected: %s. Remaining clients: %d", client.ID, len(QuicClients))
-		QuicMutex.Unlock()
+		if client.ID != "" {
+			removed := false
+			QuicMutex.Lock()
+			if QuicClients[client.ID] == client {
+				delete(QuicClients, client.ID)
+				removed = true
+			}
+			log.Printf("Node client disconnected: %s. Remaining clients: %d", client.ID, len(QuicClients))
+			QuicMutex.Unlock()
 
-		if err := database.MarkNodeInactive(client.ID); err != nil {
-			log.Printf("Failed to mark node inactive %s: %v", client.ID, err)
+			if removed {
+				if err := database.MarkNodeInactive(client.ID); err != nil {
+					log.Printf("Failed to mark node inactive %s: %v", client.ID, err)
+				}
+			} else {
+				log.Printf("Skipped inactive mark for replaced node client %s", client.ID)
+			}
 		}
 		client.closeTransport()
 	}()
+
+	if err := client.expectHello(); err != nil {
+		log.Printf("Node handshake failed for %s: %v", client.RemoteAddr, err)
+		return
+	}
 
 	for {
 		var msg Message
@@ -212,6 +205,55 @@ func quicReader(client *QuicClient) {
 			client.Pong()
 		}
 	}
+}
+
+func (c *QuicClient) expectHello() error {
+	var msg Message
+	if err := c.readMessage(&msg); err != nil {
+		return err
+	}
+	if msg.Type != "hello" {
+		return fmt.Errorf("expected hello, got %q", msg.Type)
+	}
+	return c.registerNodeID(msg.ID)
+}
+
+func (c *QuicClient) registerNodeID(nodeID string) error {
+	nodeID = normalizeNodeID(nodeID)
+	if nodeID == "" {
+		return fmt.Errorf("empty node id")
+	}
+
+	QuicMutex.Lock()
+	previous := QuicClients[nodeID]
+	if previous != nil && previous != c {
+		delete(QuicClients, nodeID)
+	}
+	delete(QuicClients, c.ID)
+	QuicMutex.Unlock()
+
+	if previous != nil && previous != c {
+		previous.Kick("duplicate node identity")
+	}
+
+	QuicMutex.Lock()
+	c.ID = nodeID
+	QuicClients[c.ID] = c
+	QuicMutex.Unlock()
+
+	c.Save()
+	return nil
+}
+
+func normalizeNodeID(nodeID string) string {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return ""
+	}
+	if strings.HasPrefix(nodeID, "node-") {
+		return nodeID
+	}
+	return "node-" + nodeID
 }
 
 func (c *QuicClient) SendMessage(msg Message) error {
@@ -257,8 +299,6 @@ func (c *QuicClient) Kick(reason string) {
 	delete(QuicClients, c.ID)
 	QuicMutex.Unlock()
 
-	updatePools() // TODO: Inefficient, optimize client erasure
-
 	log.Printf("Kicked node client %s for \"%s\"", c.ID, reason)
 }
 
@@ -286,19 +326,15 @@ func (c *QuicClient) closeTransport() {
 }
 
 func (c *QuicClient) Save() {
-	if c == nil || c.Stats == nil || c.Metrics == nil {
+	if c == nil || c.ID == "" || c.Stats == nil {
 		return
 	}
 
 	record := database.NodeRecord{
 		ID:            c.ID,
-		RemoteAddr:    c.ID,
+		RemoteAddr:    c.RemoteAddr,
 		Transport:     c.transport,
-		ActiveConns:   atomic.LoadInt32(&c.Stats.ActiveConns),
-		BytesSent:     atomic.LoadUint64(&c.Stats.BytesSent),
-		BytesReceived: atomic.LoadUint64(&c.Stats.BytesReceived),
-		Score:         c.Metrics.Score,
-		Latency:       c.Metrics.Latency,
+		OutboundBytes: atomic.LoadUint64(&c.Stats.OutboundBytes),
 		ConnectedAt:   c.Stats.ConnectTime,
 		LastSeenAt:    time.Now(),
 		IsActive:      true,

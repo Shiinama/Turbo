@@ -65,6 +65,10 @@ func ConnectQuicServer() {
 		quicMutex.Unlock()
 		connectionAttempts = 0
 
+		if err := announceNode(); err != nil {
+			log.Printf("Failed to announce node identity: %v", err)
+		}
+
 		quicReader()
 
 		log.Println("Node connection closed, reconnecting...")

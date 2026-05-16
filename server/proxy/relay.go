@@ -17,9 +17,7 @@ var (
 
 type ClientStats struct {
 	ConnectTime   time.Time
-	ActiveConns   int32
-	BytesSent     uint64
-	BytesReceived uint64
+	OutboundBytes uint64
 }
 
 func HandleSocksConn(conn net.Conn) {
@@ -76,8 +74,6 @@ func HandleSocksConn(conn net.Conn) {
 		client.userMutex.Lock()
 		client.userConns[pc.ID] = pc
 		client.userMutex.Unlock()
-		atomic.AddInt32(&client.Stats.ActiveConns, 1)
-		client.Save()
 
 		err = client.SendMessage(msg)
 		if err != nil {
@@ -85,7 +81,6 @@ func HandleSocksConn(conn net.Conn) {
 			client.userMutex.Lock()
 			delete(client.userConns, pc.ID)
 			client.userMutex.Unlock()
-			atomic.AddInt32(&client.Stats.ActiveConns, -1)
 			continue
 		}
 
@@ -97,12 +92,10 @@ func HandleSocksConn(conn net.Conn) {
 			client.userMutex.Lock()
 			delete(client.userConns, pc.ID)
 			client.userMutex.Unlock()
-			atomic.AddInt32(&client.Stats.ActiveConns, -1)
 			continue
 		}
 
 		if success {
-			atomic.AddUint64(&client.Stats.BytesSent, uint64(n))
 			go relayFromSocksToQuic(client, pc)
 			if initialData := <-pc.DataChan; len(initialData) > 0 {
 				_, err := pc.Conn.Write(initialData)
@@ -135,9 +128,7 @@ func relayFromSocksToQuic(client *QuicClient, pc *Connection) {
 		}
 
 		dataSize := uint64(n)
-		atomic.AddUint64(&client.Stats.BytesSent, dataSize)
 		pc.BytesSent += dataSize
-		client.Save()
 
 		data := base64.StdEncoding.EncodeToString(buf[:n])
 		msg := Message{Type: "data", ID: pc.ID, Data: data}
@@ -150,8 +141,9 @@ func relayFromSocksToQuic(client *QuicClient, pc *Connection) {
 func relayFromChanToSocks(client *QuicClient, pc *Connection) {
 	for data := range pc.DataChan {
 		n, err := pc.Conn.Write(data)
-		atomic.AddUint64(&client.Stats.BytesReceived, uint64(n))
-		pc.BytesReceived += uint64(n)
+		outboundBytes := uint64(n)
+		atomic.AddUint64(&client.Stats.OutboundBytes, outboundBytes)
+		pc.BytesReceived += outboundBytes
 		client.Save()
 		if err != nil {
 			//client.SendCloseMessage(pc.ID)
@@ -173,7 +165,6 @@ func (c *QuicClient) SendCloseMessage(id string) {
 		if err := database.AddProxyUserUsage(sc.ProxyUserID, sc.BytesSent, sc.BytesReceived); err != nil {
 			log.Printf("failed to update proxy user usage: %v", err)
 		}
-		atomic.AddInt32(&c.Stats.ActiveConns, -1)
 		c.Save()
 		sc.Conn.Close()
 	} else {

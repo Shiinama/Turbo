@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -32,7 +33,10 @@ var (
 	wsConn      *websocket.Conn
 	clientConns = make(map[string]*Connection)
 	clientMutex sync.Mutex
+	connected   atomic.Bool
 )
+
+const defaultServerURL = "wss://turbo-server-production-1e29.up.railway.app/node"
 
 /* On disconnect:
 Waits for 5 seconds 2 times
@@ -47,6 +51,7 @@ func ConnectQuicServer() {
 	for {
 		transport, err := dialNodeServer(serverURL)
 		if err != nil {
+			connected.Store(false)
 			if connectionAttempts == 2 {
 				retryDelay = time.Minute * 5
 			}
@@ -67,14 +72,38 @@ func ConnectQuicServer() {
 
 		if err := announceNode(); err != nil {
 			log.Printf("Failed to announce node identity: %v", err)
+			closeNodeTransport()
+			time.Sleep(time.Second * 5)
+			continue
 		}
+		connected.Store(true)
 
 		quicReader()
 
 		log.Println("Node connection closed, reconnecting...")
+		connected.Store(false)
 
 		time.Sleep(time.Second * 5)
 	}
+}
+
+func IsConnected() bool {
+	return connected.Load()
+}
+
+func closeNodeTransport() {
+	quicMutex.Lock()
+	defer quicMutex.Unlock()
+
+	if nodeConn != nil {
+		_ = nodeConn.Close()
+		nodeConn = nil
+	}
+	if wsConn != nil {
+		_ = wsConn.Close()
+		wsConn = nil
+	}
+	connected.Store(false)
 }
 
 func quicReader() {
@@ -182,7 +211,7 @@ func getServerURL() string {
 	if addr := os.Getenv("TURBO_SERVER_ADDR"); addr != "" {
 		return "tcp://" + addr
 	}
-	return "tcp://127.0.0.1:8443"
+	return defaultServerURL
 }
 
 type nodeTransport struct {

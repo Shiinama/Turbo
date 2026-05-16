@@ -14,9 +14,9 @@ const refreshInterval = time.Minute
 
 func SetupTray(icon []byte) {
 	systray.SetTemplateIcon(icon, icon)
-	systray.SetTooltip(tooltipText(0))
+	systray.SetTooltip(tooltipText(0, false))
 
-	statusItem := systray.AddMenuItem("Status: Running", "Turbo node is running")
+	statusItem := systray.AddMenuItem("Status: Reconnecting", "Turbo node connection status")
 	statusItem.Disable()
 	trafficItem := systray.AddMenuItem("Traffic: 0 B", "Transferred traffic for this run")
 	trafficItem.Disable()
@@ -25,7 +25,7 @@ func SetupTray(icon []byte) {
 	checkUpdateItem := systray.AddMenuItem("Check for Updates", "Check and install the latest Turbo version")
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Quit the whole app")
-	updateTrafficItem(trafficItem)
+	updateStatusItems(statusItem, trafficItem)
 
 	go func() {
 		ticker := time.NewTicker(refreshInterval)
@@ -34,7 +34,7 @@ func SetupTray(icon []byte) {
 		for {
 			select {
 			case <-ticker.C:
-				updateTrafficItem(trafficItem)
+				updateStatusItems(statusItem, trafficItem)
 			case <-checkUpdateItem.ClickedCh:
 				go checkForUpdates(checkUpdateItem)
 			case <-quitItem.ClickedCh:
@@ -45,15 +45,26 @@ func SetupTray(icon []byte) {
 	}()
 }
 
-func updateTrafficItem(item *systray.MenuItem) {
+func updateStatusItems(statusItem *systray.MenuItem, trafficItem *systray.MenuItem) {
 	total := quic.TrafficSnapshot().TotalBytes
 	formatted := formatBytes(total)
-	item.SetTitle("Traffic: " + formatted)
-	systray.SetTooltip(tooltipText(total))
+	connected := quic.IsConnected()
+
+	status := "Reconnecting"
+	if connected {
+		status = "Connected"
+	}
+	statusItem.SetTitle("Status: " + status)
+	trafficItem.SetTitle("Traffic: " + formatted)
+	systray.SetTooltip(tooltipText(total, connected))
 }
 
-func tooltipText(total uint64) string {
-	return "Turbo node running - " + formatBytes(total) + " transferred"
+func tooltipText(total uint64, connected bool) string {
+	status := "reconnecting"
+	if connected {
+		status = "connected"
+	}
+	return "Turbo node " + status + " - " + formatBytes(total) + " transferred"
 }
 
 func checkForUpdates(item *systray.MenuItem) {
